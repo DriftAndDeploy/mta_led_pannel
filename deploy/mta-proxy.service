@@ -1,0 +1,16 @@
+# Installed by deploy/install.sh (it fills in __USER__ and __REPO__).
+[Unit]
+Description=MTA subway panel server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__REPO__/server
+ExecStart=__REPO__/server/venv/bin/python proxy_server.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

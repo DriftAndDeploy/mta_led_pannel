@@ -1,0 +1,6 @@
+# Keep Linux line endings for scripts that run on the Pi, even when
+# committed from Windows (a CRLF in a bash script breaks it).
+*.sh       text eol=lf
+*.service  text eol=lf
+*.py       text eol=lf
+*.bin      binary

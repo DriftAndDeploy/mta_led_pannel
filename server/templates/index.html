@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0d0d0d">
+<title>When Is The Train Coming</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Bebas+Neue&display=swap');
+
+  :root {
+    --bg:      #0d0d0d;
+    --surface: #1a1a1a;
+    --border:  #2a2a2a;
+    --text:    #f0f0f0;
+    --muted:   #666;
+    --accent:  #f0f0f0;
+    --radius:  12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    padding-bottom: 40px;
+  }
+
+  header {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  header span {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    display: block;
+  }
+
+  /* Power button */
+  .power-btn {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 2px solid #444;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color .2s, color .2s, background .2s;
+    flex-shrink: 0;
+    touch-action: manipulation;
+  }
+  .power-btn:active   { background: #222; }
+  .power-btn.on       { border-color: #4f4; color: #4f4; }
+  .power-btn.off      { border-color: #f44; color: #f44; background: rgba(255,60,60,.08); }
+
+  /* Brightness slider */
+  .brightness-wrap {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+  }
+
+  .brightness-icon { color: var(--muted); flex-shrink: 0; }
+
+  #brightness-slider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: #333;
+    outline: none;
+    touch-action: manipulation;
+  }
+  #brightness-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--text);
+    cursor: pointer;
+  }
+
+  .brightness-val {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    min-width: 32px;
+    text-align: right;
+  }
+
+  .section {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  /* Line grid */
+  .line-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+  }
+
+  .line-btn {
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 3px solid transparent;
+    background: #222;
+    color: #fff;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform .15s, border-color .15s;
+    -webkit-appearance: none;
+  }
+
+  .line-btn:active { transform: scale(.92); }
+
+  .line-btn.selected {
+    border-color: #fff;
+    transform: scale(1.08);
+  }
+
+  /* Station list */
+  .station-search {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 14px;
+    margin-bottom: 10px;
+    outline: none;
+  }
+
+  .station-search::placeholder { color: var(--muted); }
+
+  .station-list {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .station-item {
+    padding: 11px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .station-item:last-child { border-bottom: none; }
+  .station-item:active, .station-item.selected { background: #252525; }
+  .station-item.selected { color: #fff; }
+
+  .station-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .station-empty {
+    padding: 20px 14px;
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  /* Platform toggle */
+  .platform-toggle {
+    display: flex;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .platform-opt {
+    flex: 1;
+    padding: 12px 10px;
+    text-align: center;
+    cursor: pointer;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 15px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    border: none;
+    background: none;
+    transition: background .15s, color .15s;
+    border-right: 1px solid var(--border);
+    line-height: 1.3;
+  }
+
+  .platform-opt:last-child { border-right: none; }
+  .platform-opt:active     { background: #252525; }
+
+  .platform-opt.selected {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .platform-opt .opt-label {
+    display: block;
+    font-size: 18px;
+  }
+
+  .platform-opt .opt-sub {
+    display: block;
+    font-size: 8px;
+    letter-spacing: 0px;
+    opacity: .7;
+    font-family: 'DM Mono', monospace;
+    margin-top: 2px;
+    text-transform: capitalize;
+  }
+
+  /* Field group (reused for walk time label) */
+  .field-group label {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  /* Walk time */
+  .walk-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .walk-stepper {
+    display: flex;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .step-btn {
+    width: 44px; height: 44px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 22px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: manipulation;  /* prevents double-tap zoom */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .step-btn:active { background: #252525; }
+
+  .walk-val {
+    min-width: 48px;
+    text-align: center;
+    font-size: 20px;
+    font-family: 'Bebas Neue', sans-serif;
+    letter-spacing: 2px;
+    color: var(--text);
+    padding: 0 4px;
+  }
+
+  .walk-unit {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+  }
+
+  /* Toggle switches */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .toggle-label {
+    font-size: 13px;
+    color: var(--text);
+    letter-spacing: .5px;
+  }
+
+  .toggle-switch {
+    position: relative;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .toggle-switch input { display: none; }
+
+  .toggle-track {
+    display: block;
+    width: 44px;
+    height: 26px;
+    background: #333;
+    border-radius: 13px;
+    position: relative;
+    transition: background .2s;
+  }
+
+  .toggle-switch input:checked + .toggle-track {
+    background: #0ee;
+  }
+
+  .toggle-thumb {
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 20px; height: 20px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .2s;
+  }
+
+  .toggle-switch input:checked + .toggle-track .toggle-thumb {
+    transform: translateX(18px);
+  }
+
+  /* Pairing modal */
+  .pair-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 200;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 24px;
+  }
+  .pair-overlay.open { display: flex; }
+
+  .pair-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 26px;
+    letter-spacing: 3px;
+    margin-bottom: 10px;
+    text-align: center;
+  }
+
+  .pair-sub {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-align: center;
+    line-height: 1.7;
+    margin-bottom: 32px;
+  }
+
+  .pair-input {
+    width: 100%;
+    max-width: 260px;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    color: var(--text);
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 28px;
+    letter-spacing: 6px;
+    text-align: center;
+    text-transform: uppercase;
+    outline: none;
+    margin-bottom: 20px;
+  }
+  .pair-input:focus { border-color: #0ee; }
+
+  .pair-hint {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    margin-bottom: 28px;
+    letter-spacing: .5px;
+  }
+
+  .pair-btn {
+    width: 100%;
+    max-width: 260px;
+    padding: 14px;
+    background: var(--text);
+    color: var(--bg);
+    border: none;
+    border-radius: var(--radius);
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 18px;
+    letter-spacing: 3px;
+    cursor: pointer;
+  }
+
+  .unpair-btn {
+    margin-top: 10px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    font-family: 'DM Mono', monospace;
+    text-decoration: underline;
+  }
+
+  /* Time color picker */
+  .color-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  #time-color {
+    -webkit-appearance: none;
+    width: 44px; height: 44px;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    background: none;
+    cursor: pointer;
+    padding: 2px;
+    flex-shrink: 0;
+  }
+  #time-color::-webkit-color-swatch-wrapper { padding: 0; border-radius: 5px; }
+  #time-color::-webkit-color-swatch { border: none; border-radius: 5px; }
+
+  .color-preview-label {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    flex: 1;
+  }
+
+  .color-reset-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  .color-reset-btn:active { background: #252525; }
+
+  .color-swatches {
+    display: flex;
+    gap: 8px;
+  }
+
+  .swatch {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: transform .15s, border-color .15s;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .swatch:active { transform: scale(.9); }
+  .swatch.active  { border-color: #fff; }
+
+  /* Save button */
+  .save-btn {
+    margin: 24px 20px 0;
+    width: calc(100% - 40px);
+    padding: 16px;
+    background: var(--text);
+    color: var(--bg);
+    border: none;
+    border-radius: var(--radius);
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 18px;
+    letter-spacing: 3px;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+  }
+
+  .save-btn:active { transform: scale(.98); opacity: .85; }
+  .save-btn:disabled { opacity: .3; }
+
+  /* Panel ID button */
+  .panel-id-btn {
+    background: none;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    transition: border-color .15s, color .15s, background .15s;
+    margin-left: auto;
+    touch-action: manipulation;
+  }
+  .panel-id-btn:active { background: #1a1a1a; border-color: #777; }
+  .panel-id-btn .pid-label {
+    font-size: 9px;
+    color: #555;
+    letter-spacing: 1px;
+    display: block;
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+  .panel-id-btn .pid-value {
+    font-size: 13px;
+    color: var(--text);
+    letter-spacing: 2px;
+    display: block;
+    line-height: 1;
+  }
+
+  /* Modal overlay */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 100;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: #141414;
+    border: 1px solid var(--border);
+    border-radius: 20px 20px 0 0;
+    padding: 28px 20px 40px;
+    width: 100%;
+    max-width: 480px;
+    animation: slideUp .25s cubic-bezier(.34,1.56,.64,1);
+  }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+  .modal-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 20px;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+
+  .modal-sub {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    margin-bottom: 24px;
+  }
+
+  .modal-close {
+    float: right;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 22px;
+    cursor: pointer;
+    line-height: 1;
+    margin-top: -4px;
+  }
+
+
+
+
+  /* Status toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: #1e1e1e;
+    border: 1px solid #333;
+    color: var(--text);
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-size: 13px;
+    letter-spacing: 1px;
+    transition: transform .3s cubic-bezier(.34,1.56,.64,1);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* Loading spinner */
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid #444;
+    border-top-color: var(--text);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-row {
+    display: flex;
+    align-items: center;
+    padding: 16px 14px;
+    color: var(--muted);
+    font-size: 12px;
+    gap: 8px;
+  }
+
+  /* Current config preview */
+  .preview {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .preview-bullet {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  .preview-text { color: var(--text); }
+
+  /* Panel connection status */
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #444;
+    flex-shrink: 0;
+  }
+  .status-dot.online  { background: #3c3; box-shadow: 0 0 6px #3c3; }
+  .status-dot.offline { background: #a33; }
+  .status-sep { opacity: .4; }
+  .demo-banner {
+    display: none;
+    margin-top: 8px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: #0ee;
+  }
+  .demo-banner.show { display: block; }
+  .toggle-hint {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+    letter-spacing: .5px;
+  }
+  .toggle-row + .toggle-row { margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-controls">
+    <button class="power-btn on" id="power-btn" onclick="togglePower()" title="Turn panel on/off" aria-label="Turn panel on or off">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+        <line x1="12" y1="2" x2="12" y2="12"/>
+      </svg>
+    </button>
+
+    <div class="brightness-wrap">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="brightness-icon">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
+      <input type="range" id="brightness-slider" min="10" max="100" step="10" value="80"
+             aria-label="Brightness"
+             oninput="onBrightnessInput(this.value)" onchange="saveBrightness(this.value)">
+      <span class="brightness-val" id="brightness-val">80%</span>
+    </div>
+
+    <button class="panel-id-btn" onclick="openPanelSwitchModal()" title="Switch panel">
+      <div>
+        <span class="pid-label">PANEL ID</span>
+        <span class="pid-value" id="header-panel-id">——</span>
+      </div>
+    </button>
+  </div>
+
+  <div class="status-row">
+    <span class="status-dot" id="status-dot"></span>
+    <span id="status-text">Checking panel…</span>
+    <span class="status-sep">·</span>
+    <span id="current-preview">—</span>
+  </div>
+  <div class="demo-banner" id="demo-banner">DEMO MODE — panel is cycling lines on its own</div>
+</header>
+
+<!-- Line picker -->
+<div class="section">
+  <div class="section-label">01 — Select Line</div>
+  <div class="line-grid" id="line-grid"></div>
+</div>
+
+<!-- Station picker -->
+<div class="section">
+  <div class="section-label">02 — Select Station</div>
+  <input class="station-search" id="station-search" placeholder="Search stations..." type="text"
+         autocomplete="off" oninput="renderStations()">
+  <div class="station-list" id="station-list">
+    <div class="station-empty">Select a line above</div>
+  </div>
+</div>
+
+<!-- Platform -->
+<div class="section">
+  <div class="section-label">03 — Platform</div>
+  <div class="platform-toggle">
+    <button class="platform-opt selected" id="platform-N" onclick="selectPlatform('N')">
+      <span class="opt-label">↑ N</span>
+      <span class="opt-sub" id="label-N">Direction 1</span>
+    </button>
+    <button class="platform-opt" id="platform-S" onclick="selectPlatform('S')">
+      <span class="opt-label">↓ S</span>
+      <span class="opt-sub" id="label-S">Direction 2</span>
+    </button>
+  </div>
+</div>
+
+<!-- Display options -->
+<div class="section">
+  <div class="section-label">04 — Display Options</div>
+  <div class="toggle-row">
+    <span class="toggle-label">Show Leave By time</span>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-leave-by" checked>
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="toggle-row">
+    <span class="toggle-label">Show Service Alerts</span>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-alerts" checked>
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="toggle-row">
+    <div>
+      <span class="toggle-label">Minimalist Mode</span>
+      <div class="toggle-hint">Logo + time centered · status dot · no scroll text</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-minimalist" onchange="updateMinimalistUI()">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="toggle-row">
+    <div>
+      <span class="toggle-label">Demo Mode</span>
+      <div class="toggle-hint">Panel cycles random lines every 45 s · saves instantly</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-demo" onchange="saveDemo(this.checked)">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+</div>
+
+<!-- Walk time -->
+<div class="section">
+  <div class="section-label">05 — Walk Time to Station</div>
+  <div class="walk-row">
+    <div class="walk-stepper">
+      <button class="step-btn" onclick="adjustWalk(-1)" aria-label="Less">−</button>
+      <div class="walk-val" id="walk-val">10</div>
+      <button class="step-btn" onclick="adjustWalk(1)" aria-label="More">+</button>
+    </div>
+    <span class="walk-unit">MINUTES</span>
+  </div>
+</div>
+
+<!-- Time colour -->
+<div class="section">
+  <div class="section-label">06 — Train Time Color</div>
+  <div class="color-row">
+    <input type="color" id="time-color" value="#ffffff" oninput="onTimeColorChange(this.value)">
+    <span class="color-preview-label" id="color-label">#FFFFFF</span>
+    <button class="color-reset-btn" onclick="setTimeColor('#ffffff')">Reset</button>
+  </div>
+  <div class="color-swatches" id="color-swatches"></div>
+</div>
+
+<button class="save-btn" id="save-btn" onclick="saveConfig()">SAVE TO PANEL</button>
+
+<div class="toast" id="toast"></div>
+
+<!-- Switch panel -->
+<div class="modal-overlay" id="panel-switch-modal" onclick="closePanelSwitchModal(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closePanelSwitchModal()">×</button>
+    <div class="modal-title">SWITCH PANEL</div>
+    <div class="modal-sub">Enter the Panel ID shown on the board when it powers on</div>
+    <input class="pair-input" id="switch-panel-input" maxlength="8" placeholder="A3F2B1"
+           autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+           oninput="this.value = this.value.toUpperCase()">
+    <div style="font-size:11px;color:var(--muted);text-align:center;margin-bottom:20px;letter-spacing:.5px">
+      Current panel: <span id="modal-current-id" style="color:var(--text)">—</span>
+    </div>
+    <button class="pair-btn" onclick="confirmPanelSwitch()">CONNECT TO PANEL</button>
+    <button class="unpair-btn" onclick="closePanelSwitchModal()">Cancel</button>
+  </div>
+</div>
+
+<!-- First-visit pairing -->
+<div class="pair-overlay" id="pair-overlay">
+  <div class="pair-title">PAIR YOUR PANEL</div>
+  <div class="pair-sub">
+    Power on your panel — its Panel ID<br>
+    shows for 15 seconds, and stays on screen<br>
+    while it waits for WiFi setup.
+  </div>
+  <input class="pair-input" id="pair-input" maxlength="8" placeholder="A3F2B1"
+         autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+         oninput="this.value = this.value.toUpperCase()">
+  <div class="pair-hint">6 letters/numbers, e.g. A3F2B1</div>
+  <button class="pair-btn" onclick="confirmPairing()">CONNECT TO PANEL</button>
+</div>
+
+<script>
+const LINE_COLORS = {{ line_colors | tojson }};
+const DIRECTIONS  = {{ direction_labels | tojson }};
+const SWATCHES = [
+  ['#ffffff', 'White'], ['#ffdc00', 'MTA Yellow'], ['#32a0ff', 'Blue'],
+  ['#ff4040', 'Red'],   ['#00c850', 'Green'],      ['#ff8c00', 'Orange'],
+];
+
+let panelId          = localStorage.getItem('panelId') || null;
+let selectedLine     = null;
+let selectedStation  = null;   // {id, name}
+let selectedPlatform = 'N';
+let allStations      = [];
+let walkMinutes      = 10;
+let panelOff         = false;
+let statusTimer      = null;
+
+// ── API helper ────────────────────────────────────────────────────────────
+async function api(path, body) {
+  const sep = path.includes('?') ? '&' : '?';
+  const url = path.startsWith('/api/config') || path.startsWith('/api/status')
+    ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
+  const opts = body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  };
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data.errors || [`HTTP ${res.status}`]).join(', '));
+  return data;
+}
+
+async function patchConfig(update, okMsg) {
+  try {
+    await api('/api/config', update);
+    if (okMsg) showToast(okMsg);
+    return true;
+  } catch (e) {
+    showToast('Save failed — ' + e.message);
+    return false;
+  }
+}
+
+// ── Pairing / switching ───────────────────────────────────────────────────
+function validId(v) { return /^[A-Z0-9]{4,8}$/.test(v); }
+
+function usePanel(id) {
+  panelId = id;
+  localStorage.setItem('panelId', id);
+  document.getElementById('header-panel-id').textContent = id;
+  init();
+}
+
+function flagInvalid(el) {
+  el.style.borderColor = '#f44';
+  setTimeout(() => el.style.borderColor = '', 1000);
+}
+
+function confirmPairing() {
+  const el = document.getElementById('pair-input');
+  const v = el.value.trim().toUpperCase();
+  if (!validId(v)) return flagInvalid(el);
+  document.getElementById('pair-overlay').classList.remove('open');
+  usePanel(v);
+}
+
+function openPanelSwitchModal() {
+  document.getElementById('switch-panel-input').value = '';
+  document.getElementById('modal-current-id').textContent = panelId || '—';
+  document.getElementById('panel-switch-modal').classList.add('open');
+}
+
+function closePanelSwitchModal(e) {
+  if (e && e.target !== document.getElementById('panel-switch-modal')) return;
+  document.getElementById('panel-switch-modal').classList.remove('open');
+}
+
+function confirmPanelSwitch() {
+  const el = document.getElementById('switch-panel-input');
+  const v = el.value.trim().toUpperCase();
+  if (!validId(v)) return flagInvalid(el);
+  document.getElementById('panel-switch-modal').classList.remove('open');
+  usePanel(v);
+}
+
+// ── Status (is the panel actually talking to the server?) ─────────────────
+function ago(s) {
+  if (s < 90) return `${s}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 172800) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+async function refreshStatus() {
+  if (!panelId) return;
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  try {
+    const s = await api('/api/status');
+    let text;
+    if (s.last_seen_s === null) {
+      text = 'Not seen yet';
+      dot.className = 'status-dot';
+    } else if (s.online) {
+      text = 'Online';
+      dot.className = 'status-dot online';
+    } else {
+      text = `Offline · seen ${ago(s.last_seen_s)}`;
+      dot.className = 'status-dot offline';
+    }
+    if (s.fw_build) {
+      text += ` · fw ${s.fw_build}`;
+      if (s.latest_fw_build && s.latest_fw_build > s.fw_build) text += ` → ${s.latest_fw_build}`;
+    }
+    txt.textContent = text;
+  } catch (e) {
+    dot.className = 'status-dot offline';
+    txt.textContent = 'Server unreachable';
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+async function init() {
+  if (!panelId) {
+    document.getElementById('pair-overlay').classList.add('open');
+    return;
+  }
+  document.getElementById('header-panel-id').textContent = panelId;
+
+  let cfg;
+  try {
+    cfg = await api('/api/config');
+  } catch (e) {
+    showToast('Could not load settings — ' + e.message);
+    return;
+  }
+
+  selectedLine     = cfg.line;
+  selectedStation  = { id: cfg.stop_parent, name: cfg.stop_name };
+  selectedPlatform = cfg.platform || 'N';
+  walkMinutes      = cfg.walk_minutes ?? 10;
+  panelOff         = cfg.panel_off === true;
+
+  document.getElementById('walk-val').textContent = walkMinutes;
+  document.getElementById('toggle-leave-by').checked   = cfg.show_leave_by !== false;
+  document.getElementById('toggle-alerts').checked     = cfg.show_alerts !== false;
+  document.getElementById('toggle-minimalist').checked = !!cfg.minimalist;
+  document.getElementById('toggle-demo').checked       = !!cfg.demo;
+  document.getElementById('demo-banner').classList.toggle('show', !!cfg.demo);
+  updateMinimalistUI();
+  updatePowerButton();
+  setBrightnessUI(cfg.brightness || 80);
+  setTimeColor(rgbToHex(cfg.time_r ?? 255, cfg.time_g ?? 255, cfg.time_b ?? 255));
+
+  buildLineGrid();
+  updatePlatformUI();
+  updatePreview();
+  loadStations(selectedLine, cfg.stop_parent);
+
+  refreshStatus();
+  clearInterval(statusTimer);
+  statusTimer = setInterval(refreshStatus, 10000);
+}
+
+// ── Lines & stations ──────────────────────────────────────────────────────
+function buildLineGrid() {
+  const grid = document.getElementById('line-grid');
+  grid.innerHTML = '';
+  Object.keys(DIRECTIONS).forEach(id => {
+    const btn = document.createElement('button');
+    btn.className = 'line-btn' + (id === selectedLine ? ' selected' : '');
+    btn.textContent = id;
+    btn.style.background = LINE_COLORS[id];
+    btn.style.color = ['N', 'Q', 'R', 'W'].includes(id) ? '#000' : '#fff';
+    btn.dataset.id = id;
+    btn.onclick = () => selectLine(id);
+    grid.appendChild(btn);
+  });
+}
+
+function selectLine(id) {
+  selectedLine = id;
+  selectedStation = null;
+  document.querySelectorAll('.line-btn').forEach(b =>
+    b.classList.toggle('selected', b.dataset.id === id));
+  updatePlatformUI();
+  updatePreview();
+  loadStations(id, null);
+}
+
+async function loadStations(line, preselectId) {
+  const list = document.getElementById('station-list');
+  list.innerHTML = '<div class="loading-row"><span class="spinner"></span> Loading stations...</div>';
+  document.getElementById('station-search').value = '';
+  try {
+    allStations = await api(`/api/stations?line=${encodeURIComponent(line)}`);
+  } catch (e) {
+    allStations = [];
+  }
+  if (line !== selectedLine) return;          // user picked another line meanwhile
+  if (preselectId) {
+    selectedStation = allStations.find(s => s.id === preselectId) || selectedStation;
+  }
+  renderStations();
+}
+
+function renderStations() {
+  const list = document.getElementById('station-list');
+  const q = document.getElementById('station-search').value.trim().toLowerCase();
+  const items = allStations.filter(s => s.name.toLowerCase().includes(q));
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = `<div class="station-empty">${allStations.length ? 'No matching stations' : 'No stations right now — the MTA feed may be down'}</div>`;
+    return;
+  }
+  const color = LINE_COLORS[selectedLine] || '#888';
+  items.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'station-item' + (selectedStation?.id === s.id ? ' selected' : '');
+    const dot = document.createElement('span');
+    dot.className = 'station-dot';
+    dot.style.background = color;
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(s.name));
+    row.onclick = () => { selectedStation = s; renderStations(); updatePreview(); };
+    list.appendChild(row);
+  });
+  list.querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+// ── Platform ──────────────────────────────────────────────────────────────
+function selectPlatform(p) { selectedPlatform = p; updatePlatformUI(); }
+
+function updatePlatformUI() {
+  const [n, s] = DIRECTIONS[selectedLine] || ['Direction 1', 'Direction 2'];
+  document.getElementById('label-N').textContent = n;
+  document.getElementById('label-S').textContent = s;
+  document.getElementById('platform-N').classList.toggle('selected', selectedPlatform === 'N');
+  document.getElementById('platform-S').classList.toggle('selected', selectedPlatform === 'S');
+}
+
+// ── Options ───────────────────────────────────────────────────────────────
+function updateMinimalistUI() {
+  const on = document.getElementById('toggle-minimalist').checked;
+  ['toggle-leave-by', 'toggle-alerts'].forEach(id =>
+    document.getElementById(id).closest('.toggle-row').style.opacity = on ? '0.35' : '1');
+}
+
+async function saveDemo(on) {
+  document.getElementById('demo-banner').classList.toggle('show', on);
+  if (!await patchConfig({ demo: on }, on ? 'Demo mode on' : 'Demo mode off')) {
+    document.getElementById('toggle-demo').checked = !on;
+    document.getElementById('demo-banner').classList.toggle('show', !on);
+  }
+}
+
+function adjustWalk(delta) {
+  walkMinutes = Math.max(1, Math.min(60, walkMinutes + delta));
+  document.getElementById('walk-val').textContent = walkMinutes;
+}
+
+// ── Power & brightness (apply instantly) ──────────────────────────────────
+function updatePowerButton() {
+  const btn = document.getElementById('power-btn');
+  btn.classList.toggle('off', panelOff);
+  btn.classList.toggle('on', !panelOff);
+}
+
+async function togglePower() {
+  panelOff = !panelOff;
+  updatePowerButton();
+  if (!await patchConfig({ panel_off: panelOff }, panelOff ? 'Panel turning off' : 'Panel turning on')) {
+    panelOff = !panelOff;
+    updatePowerButton();
+  }
+}
+
+function setBrightnessUI(v) {
+  document.getElementById('brightness-slider').value = v;
+  document.getElementById('brightness-val').textContent = v + '%';
+}
+function onBrightnessInput(v) { document.getElementById('brightness-val').textContent = v + '%'; }
+function saveBrightness(v) { patchConfig({ brightness: parseInt(v, 10) }); }
+
+// ── Colour ────────────────────────────────────────────────────────────────
+function hexToRgb(hex) {
+  return { r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16) };
+}
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map(v => Number(v).toString(16).padStart(2, '0')).join('');
+}
+
+function buildSwatches() {
+  const box = document.getElementById('color-swatches');
+  SWATCHES.forEach(([hex, name]) => {
+    const b = document.createElement('button');
+    b.className = 'swatch';
+    b.style.background = hex;
+    b.title = name;
+    b.dataset.hex = hex;
+    b.onclick = () => setTimeColor(hex);
+    box.appendChild(b);
+  });
+}
+
+function onTimeColorChange(hex) {
+  hex = hex.toLowerCase();
+  document.getElementById('color-label').textContent = hex.toUpperCase();
+  document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s.dataset.hex === hex));
+}
+
+function setTimeColor(hex) {
+  document.getElementById('time-color').value = hex;
+  onTimeColorChange(hex);
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────
+function updatePreview() {
+  document.getElementById('current-preview').textContent =
+    selectedLine && selectedStation ? `${selectedLine} · ${selectedStation.name}` : (selectedLine || '—');
+}
+
+async function saveConfig() {
+  if (!selectedLine || !selectedStation) {
+    showToast('Select a line and station first');
+    return;
+  }
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  btn.textContent = 'SAVING...';
+
+  const { r, g, b } = hexToRgb(document.getElementById('time-color').value);
+  const ok = await patchConfig({
+    line:          selectedLine,
+    stop_parent:   selectedStation.id,
+    stop_name:     selectedStation.name,
+    platform:      selectedPlatform,
+    walk_minutes:  walkMinutes,
+    show_leave_by: document.getElementById('toggle-leave-by').checked,
+    show_alerts:   document.getElementById('toggle-alerts').checked,
+    minimalist:    document.getElementById('toggle-minimalist').checked,
+    time_r: r, time_g: g, time_b: b,
+  }, '✓ Panel updates within 15 seconds');
+
+  btn.disabled = false;
+  btn.textContent = 'SAVE TO PANEL';
+  if (ok) {
+    btn.style.background = '#3a3';
+    btn.style.color = '#fff';
+    setTimeout(() => { btn.style.background = ''; btn.style.color = ''; }, 1200);
+  }
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshStatus();
+});
+
+buildSwatches();
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Python
+server/venv/
+__pycache__/
+*.pyc
+
+# Per-panel settings live on the Pi only
+server/data/
+*.tmp
+
+# Arduino IDE build output (publish with tools/publish_firmware.*)
+firmware/subway_display/build/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# server/firmware/firmware.bin IS committed on purpose — it is the OTA image.
