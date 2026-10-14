@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.0.1"
-#define FW_BUILD   601
+#define FW_VERSION "6.1.0"
+#define FW_BUILD   610
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -38,6 +38,7 @@ __attribute__((used)) static const char FW_TAG[] = "##MTAPANEL_BUILD=" STR(FW_BU
 #include <HTTPUpdate.h>
 #include <ArduinoJson.h>
 #include <WiFiManager.h>          // "WiFiManager" by tzapu
+#include <Preferences.h>
 #include <esp_ota_ops.h>
 #if __has_include(<esp_mac.h>)
   #include <esp_mac.h>
@@ -276,19 +277,126 @@ static bool readSerialCredentials(String& ssid, String& pass) {
   return false;
 }
 
-static bool joinNetwork(const String& ssid, const String& pass) {
-  Serial.printf("[setup] Joining \"%s\"...\n", ssid.c_str());
-  showSplash("Joining", ssid.c_str(), panel_id);
-  WiFi.persistent(true);              // save to flash for next boot
+// `show` draws on the panel — only allowed from setup(), never from the
+// network task (the render loop owns the display once it is running).
+static bool joinNetwork(const String& ssid, const String& pass, bool show,
+                        uint32_t timeout_ms = 15000) {
+  Serial.printf("[wifi] Joining \"%s\"...\n", ssid.c_str());
+  if (show) showSplash("Joining", ssid.c_str(), panel_id);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
   uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(250);
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeout_ms) delay(250);
   return WiFi.status() == WL_CONNECTED;
+}
+
+// ---------------------------------------------------------------------------
+// Known networks
+//
+// The panel remembers up to MAX_NETS networks in flash (newest/most recently
+// used first). That includes the one it is on now, plus any "upcoming"
+// network sent from the web app. When the current network disappears (new
+// router), the panel scans and joins whichever known network is in range.
+// ---------------------------------------------------------------------------
+const int MAX_NETS = 4;
+struct KnownNet { String ssid, pass; };
+static KnownNet known_nets[MAX_NETS];
+static int      known_count = 0;
+
+static void loadKnownNets() {
+  Preferences p;
+  p.begin("nets", true);
+  String raw = p.getString("list", "");
+  p.end();
+  known_count = 0;
+  JsonDocument doc;
+  if (raw.isEmpty() || deserializeJson(doc, raw)) return;
+  for (JsonObject o : doc.as<JsonArray>()) {
+    if (known_count >= MAX_NETS) break;
+    known_nets[known_count].ssid = o["s"] | "";
+    known_nets[known_count].pass = o["p"] | "";
+    if (known_nets[known_count].ssid.length()) known_count++;
+  }
+}
+
+static void saveKnownNets() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (int i = 0; i < known_count; i++) {
+    JsonObject o = arr.add<JsonObject>();
+    o["s"] = known_nets[i].ssid;
+    o["p"] = known_nets[i].pass;
+  }
+  String raw;
+  serializeJson(doc, raw);
+  Preferences p;
+  p.begin("nets", false);
+  p.putString("list", raw);
+  p.end();
+}
+
+// Adds (or moves) a network to position `pos` (0 = most preferred).
+// The same SSID may be stored twice with different passwords, so entering a
+// router's new password ahead of time never loses the one that works today.
+static void rememberNetwork(const String& ssid, const String& pass, int pos) {
+  if (ssid.isEmpty()) return;
+  int found = -1;
+  for (int i = 0; i < known_count; i++)
+    if (known_nets[i].ssid == ssid && known_nets[i].pass == pass) { found = i; break; }
+  if (found == pos) return;
+  KnownNet n = {ssid, pass};
+  if (found >= 0) {                                  // remove existing copy
+    for (int i = found; i < known_count - 1; i++) known_nets[i] = known_nets[i + 1];
+    known_count--;
+  } else if (known_count == MAX_NETS) {
+    known_count--;                                   // drop the oldest
+  }
+  pos = constrain(pos, 0, known_count);
+  for (int i = known_count; i > pos; i--) known_nets[i] = known_nets[i - 1];
+  known_nets[pos] = n;
+  known_count++;
+  saveKnownNets();
+  Serial.printf("[wifi] Remembered \"%s\" (%d known)\n", ssid.c_str(), known_count);
+}
+
+static void rememberCurrentNetwork() {
+  if (WiFi.status() == WL_CONNECTED) rememberNetwork(WiFi.SSID(), WiFi.psk(), 0);
+}
+
+// Scan, then try every known network that is in range, preferred first.
+static bool tryKnownNetworks(bool show) {
+  if (known_count == 0) return false;
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  int found = WiFi.scanNetworks();
+  if (found <= 0) { WiFi.scanDelete(); return false; }
+  bool visible[MAX_NETS] = {false};
+  for (int i = 0; i < known_count; i++)
+    for (int j = 0; j < found; j++)
+      if (WiFi.SSID(j) == known_nets[i].ssid) { visible[i] = true; break; }
+  WiFi.scanDelete();
+
+  for (int i = 0; i < known_count; i++) {
+    if (!visible[i]) continue;
+    KnownNet n = known_nets[i];                      // copy: list may reorder
+    if (joinNetwork(n.ssid, n.pass, show)) {
+      rememberNetwork(n.ssid, n.pass, 0);
+      return true;
+    }
+  }
+  return false;
 }
 
 void connectWifi() {
   WiFi.mode(WIFI_STA);
+  loadKnownNets();
+  if (tryKnownNetworks(true)) {
+    WiFi.setAutoReconnect(true);
+    Serial.printf("Connected to known network \"%s\"  %s  RSSI %d\n", WiFi.SSID().c_str(),
+                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    return;
+  }
+
   WiFiManager wm;
   wm.setAPCallback([](WiFiManager*) {
     char idLine[16];
@@ -310,7 +418,7 @@ void connectWifi() {
 
       if (readSerialCredentials(ssid, pass)) {
         wm.stopConfigPortal();
-        if (joinNetwork(ssid, pass)) break;
+        if (joinNetwork(ssid, pass, true, 20000)) break;
         Serial.println("[setup] Could not join — check the name and password. Hotspot restarting.");
         wm.startConfigPortal(AP_NAME);
       }
@@ -331,22 +439,35 @@ void connectWifi() {
     WiFi.mode(WIFI_STA);
   }
   WiFi.setAutoReconnect(true);
-  Serial.printf("Connected: %s  RSSI %d\n",
+  rememberCurrentNetwork();           // portal, serial or saved creds — keep it
+  Serial.printf("Connected to \"%s\"  %s  RSSI %d\n", WiFi.SSID().c_str(),
                 WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
 // ---------------------------------------------------------------------------
 // Network task (core 0)
 // ---------------------------------------------------------------------------
-static int latest_server_build = 0;
-static int failed_ota_build    = 0;   // don't retry a build that failed this boot
+static int    latest_server_build = 0;
+static int    failed_ota_build    = 0;   // don't retry a build that failed this boot
+static String wifi_ack_id;               // ack for a network the web app sent us
 
 void netTask(void*) {
-  uint32_t offline_since = 0;
+  uint32_t offline_since = 0, last_switch_try = 0;
   for (;;) {
     if (WiFi.status() != WL_CONNECTED) {
-      if (!offline_since) offline_since = millis();
-      if (millis() - offline_since > OFFLINE_REBOOT_MS) {
+      uint32_t now = millis();
+      if (!offline_since) offline_since = now;
+      // Current network gone for 30 s (e.g. router swapped)? Try the others.
+      if (now - offline_since > 30000 && now - last_switch_try > 90000) {
+        last_switch_try = now;
+        Serial.println("[wifi] Offline — trying known networks");
+        if (tryKnownNetworks(false)) {
+          Serial.printf("[wifi] Switched to \"%s\"\n", WiFi.SSID().c_str());
+          offline_since = 0;
+          continue;
+        }
+      }
+      if (now - offline_since > OFFLINE_REBOOT_MS) {
         Serial.println("Offline too long — rebooting (opens PanelSetup if needed)");
         ESP.restart();
       }
@@ -370,10 +491,24 @@ static void copyStr(char* dst, size_t size, const char* src) {
   dst[size - 1] = '\0';
 }
 
+static String urlEncode(const String& s) {
+  static const char* hex = "0123456789ABCDEF";
+  String out;
+  for (size_t i = 0; i < s.length(); i++) {
+    uint8_t c = s[i];
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += (char)c;
+    else { out += '%'; out += hex[c >> 4]; out += hex[c & 15]; }
+  }
+  return out;
+}
+
 bool fetchTrainTimes() {
-  char url[200];
-  snprintf(url, sizeof(url), "https://%s/next-trains?panel_id=%s&fw=%d",
-           PROXY_HOST, panel_id, FW_BUILD);
+  // Report which network we're on (shown in the web app) and acknowledge
+  // any network the web app sent, so the server can delete its password.
+  String url = String("https://") + PROXY_HOST + "/next-trains?panel_id=" + panel_id +
+               "&fw=" + FW_BUILD + "&ssid=" + urlEncode(WiFi.SSID()) +
+               "&rssi=" + WiFi.RSSI();
+  if (wifi_ack_id.length()) url += "&wifi_ok=" + urlEncode(wifi_ack_id);
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -418,6 +553,21 @@ bool fetchTrainTimes() {
   n.have_data      = true;
   n.updated_ms     = millis();
   latest_server_build = doc["fw_build"] | 0;
+
+  // Upcoming network from the web app: store it as the next choice after the
+  // current one, then acknowledge on the next request.
+  JsonObject net = doc["wifi_new"];
+  if (!net.isNull()) {
+    String id = net["id"] | "";
+    String ssid = net["ssid"] | "";
+    if (ssid.length() && id != wifi_ack_id) {
+      rememberCurrentNetwork();
+      rememberNetwork(ssid, String(net["pass"] | ""), 1);
+      wifi_ack_id = id;
+    }
+  } else {
+    wifi_ack_id = "";                 // server has our ack; stop sending it
+  }
 
   xSemaphoreTake(g_state_mutex, portMAX_DELAY);
   n.version = g_state.version + 1;

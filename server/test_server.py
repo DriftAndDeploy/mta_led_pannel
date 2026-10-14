@@ -140,6 +140,66 @@ class Api(unittest.TestCase):
         self.assertNotIn(b"{{", r.data)
 
 
+class WifiHandoff(unittest.TestCase):
+    def setUp(self):
+        self.client = ps.app.test_client()
+        self.patches = [mock.patch.object(ps, "get_feed", side_effect=RuntimeError("offline")),
+                        mock.patch.object(ps, "alert_for_line", return_value=("", 0))]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+
+    def poll(self, pid, ack=None):
+        url = f"/next-trains?panel_id={pid}&fw=610&ssid=Old%20Router&rssi=-60"
+        if ack:
+            url += f"&wifi_ok={ack}"
+        return self.client.get(url).get_json()
+
+    def test_full_handoff_deletes_password(self):
+        r = self.client.post("/api/wifi?panel_id=WF0001",
+                             json={"ssid": "New Router", "password": "hunter2hunter2"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["pending_ssid"], "New Router")
+
+        first = self.poll("WF0001")["wifi_new"]
+        self.assertEqual((first["ssid"], first["pass"]), ("New Router", "hunter2hunter2"))
+        self.assertEqual(self.poll("WF0001")["wifi_new"]["id"], first["id"])   # resent until acked
+
+        self.assertNotIn("wifi_new", self.poll("WF0001", ack=first["id"]))
+        status = self.client.get("/api/wifi?panel_id=WF0001").get_json()
+        self.assertIsNone(status["pending_ssid"])
+        self.assertEqual(status["delivered"]["ssid"], "New Router")
+        self.assertEqual(status["current_ssid"], "Old Router")
+        with open(ps.config_path("WF0001")) as f:
+            self.assertNotIn("hunter2", f.read())
+
+    def test_wrong_ack_keeps_pending(self):
+        self.client.post("/api/wifi?panel_id=WF0002", json={"ssid": "Net", "password": ""})
+        self.assertIn("wifi_new", self.poll("WF0002", ack="deadbeef"))
+
+    def test_password_never_reaches_web_app(self):
+        self.client.post("/api/wifi?panel_id=WF0003", json={"ssid": "Net", "password": "secretsecret"})
+        self.assertNotIn(b"secretsecret", self.client.get("/api/config?panel_id=WF0003").data)
+        self.assertNotIn(b"secretsecret", self.client.get("/api/wifi?panel_id=WF0003").data)
+        r = self.client.post("/api/config?panel_id=WF0003", json={"brightness": 50})
+        self.assertNotIn(b"secretsecret", r.data)
+
+    def test_cancel_and_validation(self):
+        self.client.post("/api/wifi?panel_id=WF0004", json={"ssid": "Net", "password": "12345678"})
+        self.client.delete("/api/wifi?panel_id=WF0004")
+        self.assertNotIn("wifi_new", self.poll("WF0004"))
+        self.assertEqual(self.client.post("/api/wifi?panel_id=WF0004",
+                                          json={"ssid": "", "password": "12345678"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/wifi?panel_id=WF0004",
+                                          json={"ssid": "Net", "password": "short"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/config?panel_id=WF0004",
+                                          json={"wifi_pending": {"ssid": "x"}}).status_code, 200)
+        self.assertNotIn("wifi_new", self.poll("WF0004"))   # can't inject via /api/config
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

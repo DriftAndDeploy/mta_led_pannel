@@ -20,6 +20,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta
@@ -252,19 +253,54 @@ _seen_lock = threading.Lock()
 _seen: dict[str, dict] = {}
 
 
-def record_seen(panel_id: str, fw_build: int | None) -> None:
+def record_seen(panel_id: str, fw_build: int | None, ssid: str | None = None,
+                rssi: int | None = None) -> None:
     with _seen_lock:
-        _seen[panel_id] = {"ts": time.time(), "fw_build": fw_build}
+        _seen[panel_id] = {"ts": time.time(), "fw_build": fw_build,
+                           "ssid": (ssid or "")[:32] or None, "rssi": rssi}
 
 
 def panel_status(panel_id: str) -> dict:
     with _seen_lock:
         info = _seen.get(panel_id)
     if not info:
-        return {"online": False, "last_seen_s": None, "fw_build": None}
+        return {"online": False, "last_seen_s": None, "fw_build": None,
+                "ssid": None, "rssi": None}
     age = time.time() - info["ts"]
     return {"online": age < ONLINE_WINDOW_S, "last_seen_s": int(age),
-            "fw_build": info["fw_build"]}
+            "fw_build": info["fw_build"], "ssid": info["ssid"], "rssi": info["rssi"]}
+
+
+# ── WiFi hand-off (send an upcoming network to a panel) ───────────────────
+#
+# The web app stores {id, ssid, password} in the panel's config as
+# "wifi_pending". /next-trains hands it to the panel, the panel echoes the id
+# back as ?wifi_ok=, and the password is then deleted from the Pi — only the
+# network name is kept, as "wifi_delivered".
+
+WIFI_KEYS = ("wifi_pending", "wifi_delivered")
+
+
+def public_config(cfg: dict) -> dict:
+    """Config as shown to the web app: never includes WiFi passwords."""
+    return {k: v for k, v in cfg.items() if k not in WIFI_KEYS}
+
+
+def wifi_handoff(panel_id: str, ack_id: str | None) -> dict | None:
+    """Process a panel's ack; return the network still waiting to be sent."""
+    with _config_lock:
+        cfg = load_config(panel_id)
+        pending = cfg.get("wifi_pending")
+        if not pending:
+            return None
+        if ack_id and ack_id == pending.get("id"):
+            cfg.pop("wifi_pending", None)
+            cfg["wifi_delivered"] = {"ssid": pending["ssid"], "at": int(time.time())}
+            save_config(panel_id, cfg)
+            log.info("WiFi network \"%s\" delivered to panel %s — password deleted",
+                     pending["ssid"], panel_id)
+            return None
+        return {"id": pending["id"], "ssid": pending["ssid"], "pass": pending["password"]}
 
 
 # ── MTA data ──────────────────────────────────────────────────────────────
@@ -464,7 +500,9 @@ def demo_selection(panel_id: str, slot: int) -> tuple[str, dict | None, str]:
 def next_trains():
     panel_id = clean_panel_id(request.args.get("panel_id")) or "DEFAULT"
     fw_build = request.args.get("fw", type=int)
-    record_seen(panel_id, fw_build)
+    record_seen(panel_id, fw_build, request.args.get("ssid"),
+                request.args.get("rssi", type=int))
+    wifi_new = wifi_handoff(panel_id, request.args.get("wifi_ok"))
 
     cfg = load_config(panel_id)
     line, stop_parent, platform = cfg["line"], cfg["stop_parent"], cfg["platform"]
@@ -490,7 +528,7 @@ def next_trains():
 
     # Always 200: even when the MTA is down the panel still needs its
     # brightness / power / colour settings.
-    return jsonify({
+    payload = {
         "train_time":     train_time,
         "leave_by":       leave_by if cfg["show_leave_by"] else "",
         "alert_msg":      alert_text if cfg["show_alerts"] else "",
@@ -506,7 +544,10 @@ def next_trains():
         "time_r": cfg["time_r"], "time_g": cfg["time_g"], "time_b": cfg["time_b"],
         "fw_build":       fw["build"] if fw else 0,
         "error":          error,
-    })
+    }
+    if wifi_new:
+        payload["wifi_new"] = wifi_new
+    return jsonify(payload)
 
 
 # ── Web app API ───────────────────────────────────────────────────────────
@@ -522,7 +563,7 @@ def require_panel_id() -> str:
 def api_config():
     pid = require_panel_id()
     if request.method == "GET":
-        return jsonify(load_config(pid))
+        return jsonify(public_config(load_config(pid)))
     update, errors = validate_update(request.get_json(silent=True))
     if errors:
         return jsonify({"ok": False, "errors": errors}), 400
@@ -531,7 +572,7 @@ def api_config():
         cfg.update(update)
         save_config(pid, cfg)
     log.info("Config updated [%s]: %s", pid, update)
-    return jsonify({"ok": True, "config": cfg})
+    return jsonify({"ok": True, "config": public_config(cfg)})
 
 
 @app.get("/api/status")
@@ -539,6 +580,44 @@ def api_status():
     pid = require_panel_id()
     fw = firmware_info()
     return jsonify({**panel_status(pid), "latest_fw_build": fw["build"] if fw else None})
+
+
+@app.route("/api/wifi", methods=["GET", "POST", "DELETE"])
+def api_wifi():
+    """Send an upcoming WiFi network to the panel (before swapping routers)."""
+    pid = require_panel_id()
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        ssid = data.get("ssid")
+        password = data.get("password", "")
+        errors = []
+        if not isinstance(ssid, str) or not 1 <= len(ssid.encode()) <= 32:
+            errors.append("Network name must be 1-32 characters")
+        if not isinstance(password, str) or (password and not 8 <= len(password) <= 63):
+            errors.append("Password must be 8-63 characters (or empty for an open network)")
+        if errors:
+            return jsonify({"ok": False, "errors": errors}), 400
+        with _config_lock:
+            cfg = load_config(pid)
+            cfg["wifi_pending"] = {"id": secrets.token_hex(4), "ssid": ssid,
+                                   "password": password, "created": int(time.time())}
+            save_config(pid, cfg)
+        log.info("WiFi network \"%s\" queued for panel %s", ssid, pid)
+    elif request.method == "DELETE":
+        with _config_lock:
+            cfg = load_config(pid)
+            if cfg.pop("wifi_pending", None) is not None:
+                save_config(pid, cfg)
+    cfg = load_config(pid)
+    pending = cfg.get("wifi_pending")
+    status = panel_status(pid)
+    return jsonify({
+        "ok": True,
+        "current_ssid": status["ssid"],
+        "rssi": status["rssi"],
+        "pending_ssid": pending["ssid"] if pending else None,
+        "delivered": cfg.get("wifi_delivered"),
+    })
 
 
 @app.get("/api/lines")

@@ -701,6 +701,61 @@
     letter-spacing: .5px;
   }
   .toggle-row + .toggle-row { margin-top: 12px; }
+
+  /* Panel WiFi */
+  .wifi-now {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: .5px;
+    margin-bottom: 14px;
+    line-height: 1.6;
+  }
+  .wifi-now b { color: var(--text); font-weight: 500; }
+  .wifi-field {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 11px 14px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 14px;
+    margin-bottom: 10px;
+    outline: none;
+  }
+  .wifi-field:focus { border-color: #0ee; }
+  .wifi-field::placeholder { color: var(--muted); }
+  .wifi-actions { display: flex; gap: 10px; align-items: center; }
+  .wifi-send {
+    flex: 1;
+    padding: 12px;
+    background: none;
+    border: 1px solid #0ee;
+    color: #0ee;
+    border-radius: var(--radius);
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 16px;
+    letter-spacing: 2px;
+    cursor: pointer;
+  }
+  .wifi-send:active { background: rgba(0,238,238,.1); }
+  .wifi-send:disabled { opacity: .4; }
+  .wifi-state {
+    font-size: 11px;
+    letter-spacing: .5px;
+    margin-top: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+    display: none;
+  }
+  .wifi-state.show { display: block; }
+  .wifi-state.pending { color: #fc0; }
+  .wifi-state.done { color: #5c5; }
+  .wifi-cancel {
+    background: none; border: none; color: var(--muted);
+    font-family: 'DM Mono', monospace; font-size: 11px;
+    text-decoration: underline; cursor: pointer; padding: 0; margin-left: 6px;
+  }
 </style>
 </head>
 <body>
@@ -837,6 +892,25 @@
     <button class="color-reset-btn" onclick="setTimeColor('#ffffff')">Reset</button>
   </div>
   <div class="color-swatches" id="color-swatches"></div>
+</div>
+
+<!-- Panel WiFi -->
+<div class="section">
+  <div class="section-label">07 — Panel WiFi</div>
+  <div class="wifi-now" id="wifi-now">Panel network: —</div>
+  <div class="wifi-now">
+    Getting a new router or changing the password? Add the new network here
+    <b>while the panel is still online</b>. It keeps both and switches by itself
+    when the old one goes away.
+  </div>
+  <input class="wifi-field" id="wifi-ssid" placeholder="New network name" autocomplete="off"
+         autocorrect="off" autocapitalize="none" spellcheck="false" maxlength="32">
+  <input class="wifi-field" id="wifi-pass" placeholder="Password" type="password"
+         autocomplete="new-password" maxlength="63">
+  <div class="wifi-actions">
+    <button class="wifi-send" id="wifi-send" onclick="sendWifi()">SEND TO PANEL</button>
+  </div>
+  <div class="wifi-state" id="wifi-state"></div>
 </div>
 
 <button class="save-btn" id="save-btn" onclick="saveConfig()">SAVE TO PANEL</button>
@@ -993,6 +1067,79 @@ async function refreshStatus() {
     dot.className = 'status-dot offline';
     txt.textContent = 'Server unreachable';
   }
+  refreshWifi();
+}
+
+// ── Panel WiFi hand-off ───────────────────────────────────────────────────
+function signalWord(rssi) {
+  if (rssi == null) return '';
+  if (rssi >= -60) return ' · strong signal';
+  if (rssi >= -72) return ' · ok signal';
+  return ' · weak signal';
+}
+
+function renderWifi(w) {
+  const now = document.getElementById('wifi-now');
+  now.innerHTML = '';
+  now.append('Panel network: ');
+  const b = document.createElement('b');
+  b.textContent = w.current_ssid || 'unknown (panel not seen yet)';
+  now.append(b, signalWord(w.rssi));
+
+  const st = document.getElementById('wifi-state');
+  st.innerHTML = '';
+  st.className = 'wifi-state';
+  if (w.pending_ssid) {
+    st.className = 'wifi-state show pending';
+    st.append(`Waiting for the panel to pick up "${w.pending_ssid}" — happens on its next check-in (≈15 s).`);
+    const c = document.createElement('button');
+    c.className = 'wifi-cancel';
+    c.textContent = 'Cancel';
+    c.onclick = cancelWifi;
+    st.append(c);
+  } else if (w.delivered) {
+    const mins = Math.round((Date.now() / 1000 - w.delivered.at) / 60);
+    const when = mins < 2 ? 'just now' : mins < 120 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
+    st.className = 'wifi-state show done';
+    st.textContent = w.current_ssid === w.delivered.ssid
+      ? `✓ Panel is on "${w.delivered.ssid}".`
+      : `✓ Panel saved "${w.delivered.ssid}" ${when}. It will switch on its own when the current network goes away.`;
+  }
+}
+
+async function refreshWifi() {
+  if (!panelId) return;
+  try { renderWifi(await api('/api/wifi?panel_id=' + encodeURIComponent(panelId))); } catch (e) {}
+}
+
+async function sendWifi() {
+  const ssid = document.getElementById('wifi-ssid').value;
+  const password = document.getElementById('wifi-pass').value;
+  if (!ssid.trim()) return showToast('Enter the network name');
+  if (password && password.length < 8) return showToast('WiFi passwords are at least 8 characters');
+  const btn = document.getElementById('wifi-send');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/wifi?panel_id=' + encodeURIComponent(panelId), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssid, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error((data.errors || ['failed']).join(', '));
+    document.getElementById('wifi-pass').value = '';
+    renderWifi(data);
+    showToast('Sent — panel saves it within 15 s');
+  } catch (e) {
+    showToast('Could not send — ' + e.message);
+  }
+  btn.disabled = false;
+}
+
+async function cancelWifi() {
+  try {
+    const res = await fetch('/api/wifi?panel_id=' + encodeURIComponent(panelId), { method: 'DELETE' });
+    renderWifi(await res.json());
+  } catch (e) {}
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────

@@ -145,6 +145,26 @@ If that page won't load, plug the panel into your PC instead: Arduino IDE →
 **Tools → Serial Monitor**, set **115200 baud** and **Newline**, then type
 `NetworkName|password` and press Enter. The panel saves it and connects.
 
+## Changing WiFi (new router or password)
+
+**Before** you swap routers or change the password, while the panels are still
+online:
+
+1. Open the web app → **07 — Panel WiFi** → enter the new network name and
+   password → **Send to panel**.
+2. Within ~15 s it shows "✓ Panel saved …". The password is then deleted from
+   the Pi; only the panel keeps it.
+3. Repeat for each panel (tap **PANEL ID** to switch panels).
+4. Swap the router. About 30 s after the old network disappears, each panel
+   scans and joins the new one by itself.
+
+Each panel remembers up to 4 networks, so it also moves between known networks
+on its own. Easiest of all: give a new router the same name and password as the
+old one, and nothing needs to change.
+
+Forgot to do it in advance? Use the PanelSetup hotspot or the Serial Monitor
+method above.
+
 ## Troubleshooting
 
 | Symptom | Check |
