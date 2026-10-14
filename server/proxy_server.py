@@ -102,6 +102,7 @@ DEFAULT_CONFIG = {
     "time_g":        255,
     "time_b":        255,
     "auto_update":   True,
+    "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
 }
 
 
@@ -229,6 +230,7 @@ CONFIG_SCHEMA = {
     "time_g":        _int_range(0, 255),
     "time_b":        _int_range(0, 255),
     "auto_update":   _bool,
+    "latch_blanking": _int_range(1, 8),
 }
 
 
@@ -540,6 +542,7 @@ def next_trains():
         "show_alerts":    cfg["show_alerts"],
         "minimalist":     1 if cfg["minimalist"] else 0,
         "brightness":     cfg["brightness"],
+        "latch_blanking": cfg["latch_blanking"],
         "panel_off":      1 if cfg["panel_off"] else 0,
         "time_r": cfg["time_r"], "time_g": cfg["time_g"], "time_b": cfg["time_b"],
         "fw_build":       fw["build"] if fw else 0,

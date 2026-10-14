@@ -860,6 +860,17 @@
   </div>
   <div class="toggle-row">
     <div>
+      <span class="toggle-label">Ghosting Fix</span>
+      <div class="toggle-hint">Raise if faint lines appear next to lit pixels · applies instantly</div>
+    </div>
+    <div class="walk-stepper">
+      <button class="step-btn" onclick="adjustLatch(-1)" aria-label="Less">−</button>
+      <div class="walk-val" id="latch-val">4</div>
+      <button class="step-btn" onclick="adjustLatch(1)" aria-label="More">+</button>
+    </div>
+  </div>
+  <div class="toggle-row">
+    <div>
       <span class="toggle-label">Demo Mode</span>
       <div class="toggle-hint">Panel cycles random lines every 45 s · saves instantly</div>
     </div>
@@ -965,6 +976,8 @@ let allStations      = [];
 let walkMinutes      = 10;
 let panelOff         = false;
 let statusTimer      = null;
+let latchBlanking    = 4;
+let latchTimer       = null;
 
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
@@ -1165,6 +1178,8 @@ async function init() {
   panelOff         = cfg.panel_off === true;
 
   document.getElementById('walk-val').textContent = walkMinutes;
+  latchBlanking = cfg.latch_blanking || 4;
+  document.getElementById('latch-val').textContent = latchBlanking;
   document.getElementById('toggle-leave-by').checked   = cfg.show_leave_by !== false;
   document.getElementById('toggle-alerts').checked     = cfg.show_alerts !== false;
   document.getElementById('toggle-minimalist').checked = !!cfg.minimalist;
@@ -1275,6 +1290,14 @@ async function saveDemo(on) {
     document.getElementById('toggle-demo').checked = !on;
     document.getElementById('demo-banner').classList.toggle('show', !on);
   }
+}
+
+function adjustLatch(delta) {
+  latchBlanking = Math.max(1, Math.min(8, latchBlanking + delta));
+  document.getElementById('latch-val').textContent = latchBlanking;
+  clearTimeout(latchTimer);   // save once tapping stops
+  latchTimer = setTimeout(() =>
+    patchConfig({ latch_blanking: latchBlanking }, `Ghosting fix ${latchBlanking} — panel updates within 15 s`), 600);
 }
 
 function adjustWalk(delta) {

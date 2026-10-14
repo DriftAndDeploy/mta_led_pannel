@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.1.0"
-#define FW_BUILD   610
+#define FW_VERSION "6.2.0"
+#define FW_BUILD   620
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -60,9 +60,9 @@ const uint32_t FRAME_MS          = 40;      // render rate; one scroll px per fr
 const uint32_t ID_SPLASH_MS      = 15000;   // Panel ID screen on power-up
 const uint32_t HTTP_TIMEOUT_MS   = 8000;
 
-// Panel driving. latch_blanking hides the "ghost" glow that appears beside
-// lit pixels (most visible left of the logo and inside yellow logo letters).
-// Raise to 6-8 if ghosting persists; lower if the panel looks too dim.
+// Panel driving. latch_blanking hides the "ghost" glow / faint lines that
+// appear next to lit pixels. This is only the boot default: the web app's
+// "Ghosting Fix" setting (1-8) overrides it at runtime.
 const uint8_t  LATCH_BLANKING    = 4;
 
 // ---------------------------------------------------------------------------
@@ -79,6 +79,7 @@ struct PanelState {
   uint8_t  logo_r = 167, logo_g = 169, logo_b = 172;
   uint8_t  time_r = 255, time_g = 255, time_b = 255;
   uint8_t  brightness     = 80;
+  uint8_t  latch_blanking = LATCH_BLANKING;
   uint8_t  service_status = 0;      // 0 normal, 1 delays/changes, 2 suspended
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
@@ -545,6 +546,7 @@ bool fetchTrainTimes() {
   n.time_g         = doc["time_g"]  | 255;
   n.time_b         = doc["time_b"]  | 255;
   n.brightness     = constrain((int)(doc["brightness"] | 80), 0, 100);
+  n.latch_blanking = constrain((int)(doc["latch_blanking"] | (int)LATCH_BLANKING), 1, 8);
   n.service_status = doc["service_status"] | 0;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
@@ -624,6 +626,7 @@ static uint32_t scroll_version = 0;
 static char     leave_part[24]  = "";
 static char     alert_part[110] = "";
 static int      last_brightness = -1;
+static int      last_latch      = -1;
 
 void render(const PanelState& in) {
   PanelState s = in;
@@ -632,6 +635,14 @@ void render(const PanelState& in) {
   if (millis() - s.updated_ms > STALE_MS) {
     copyStr(s.train_time, sizeof(s.train_time), "--:--");
     s.leave_by[0] = '\0';
+  }
+
+  // Latch blanking is baked into the panel's timing data when brightness is
+  // applied, so changing it forces brightness to be re-applied as well.
+  if (s.latch_blanking != last_latch) {
+    dma_display->setLatBlanking(s.latch_blanking);
+    last_latch = s.latch_blanking;
+    last_brightness = -1;
   }
 
   int target = s.panel_off ? 0 : map(s.brightness, 0, 100, 0, 255);

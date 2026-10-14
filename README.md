@@ -19,7 +19,8 @@ ESP32 + HUB75 panel  ──HTTPS──▶  Cloudflare tunnel  ──▶  Raspber
 | `server/firmware/firmware.bin` | Published OTA image (created by the publish script) |
 | `server/test_server.py` | Offline tests: `cd server && venv/bin/python -m unittest -v` |
 | `deploy/install.sh` | One-time Pi setup / migration |
-| `deploy/update.sh` | Pull from GitHub + restart (use for every update) |
+| `deploy/update.sh` | Pull from GitHub + restart right now (otherwise automatic every 5 min) |
+| `deploy/auto_update.sh` | Run by the `mta-autoupdate` timer every 5 minutes |
 | `tools/publish_firmware.ps1` / `.sh` | Copy an exported build into `server/firmware/` |
 
 ---
@@ -87,8 +88,18 @@ Repeat for each panel. After this, never plug in again unless a panel is dead.
 
 ```bash
 git commit -am "..." && git push
-ssh janniel-pi@raspberrypi.local '~/code/mta_led_pannel/deploy/update.sh'
 ```
+
+That's it. The Pi checks GitHub every 5 minutes, pulls new commits and
+restarts the server. If the new version fails its health check it rolls back
+on its own and skips that commit until you push a fix.
+
+> **Everything pushed to `main` goes live within 5 minutes**, including
+> `server/firmware/firmware.bin`, which the panels then install. Put
+> unfinished work on a branch.
+
+Check what it did: `journalctl -u mta-autoupdate -n 30 --no-pager` (on the Pi).
+To update immediately instead of waiting, run `deploy/update.sh` on the Pi.
 
 ### Release new panel firmware over the air
 
@@ -102,13 +113,12 @@ ssh janniel-pi@raspberrypi.local '~/code/mta_led_pannel/deploy/update.sh'
    ./tools/publish_firmware.sh                                           # WSL / Git Bash
    ```
    It refuses to publish unless the build number went up.
-4. Commit, push, update the Pi:
+4. Commit and push:
    ```bash
    git add server/firmware/firmware.bin firmware/ && git commit -m "Firmware build 601" && git push
-   ssh janniel-pi@raspberrypi.local '~/code/mta_led_pannel/deploy/update.sh'
    ```
 
-Within ~15 s each panel shows **UPDATING** with a progress bar, reboots, and
+Within 5 minutes the Pi has it, and ~15 s later each panel shows **UPDATING** with a progress bar, reboots, and
 comes back on the new build. The web app header shows the running build
 (`fw 600 → 601` while an update is pending, then `fw 601`).
 
@@ -175,4 +185,5 @@ method above.
 | OTA never starts | `curl https://whenisthetraincoming.com/firmware/info` shows the new build? Panel was flashed with the Minimal SPIFFS scheme? |
 | "UPDATE FAIL" on panel | Serial monitor at 115200 prints the reason; usually a partition-scheme mismatch |
 | PanelSetup page won't load | Use the Serial Monitor method above (USB cable) |
-| Faint glow next to lit pixels | Raise `LATCH_BLANKING` in the sketch (4 → 6 or 8) |
+| Faint lines / glow next to lit pixels | Web app → **Ghosting Fix** → raise it (4 → 6 → 8) until it's gone |
+| Pushed but nothing changed | Wait 5 min, then on the Pi: `journalctl -u mta-autoupdate -n 30 --no-pager` |

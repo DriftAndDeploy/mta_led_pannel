@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Pull the latest code from GitHub and restart the server.
+# Pull the latest code from GitHub and restart the server — right now.
+# (The Pi also does this by itself every 5 minutes via mta-autoupdate.timer;
+#  use this script when you don't want to wait.)
 #
 #   ~/code/mta_led_pannel/deploy/update.sh
 #   ssh janniel-pi@raspberrypi.local '~/code/mta_led_pannel/deploy/update.sh'
@@ -27,6 +29,7 @@ if ! git diff --quiet "$before" "$after" -- server/requirements.txt || [ ! -f se
   touch server/venv/.installed
 fi
 
+bash deploy/install_units.sh        # also turns on the 5-minute auto-update timer
 sudo systemctl restart mta-proxy
 for i in 1 2 3 4 5; do
   if out="$(curl -fsS http://localhost:5000/healthz 2>/dev/null)"; then

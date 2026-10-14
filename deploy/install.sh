@@ -5,12 +5,13 @@
 #
 # - creates server/venv and installs requirements
 # - copies panel configs from the old ~/code/mta_panel_server folder (if found)
-# - installs/updates the mta-proxy systemd service to run from this repo
+# - installs/updates the mta-proxy service and the auto-update timer
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OLD_DIR="${OLD_DIR:-$HOME/code/mta_panel_server}"
 cd "$REPO"
+git config core.fileMode false   # chmod +x on the Pi must not block git pull
 
 echo "==> Python environment"
 [ -x server/venv/bin/python ] || python3 -m venv server/venv
@@ -26,13 +27,10 @@ else
   echo "    no old configs found in $OLD_DIR — panels start with defaults"
 fi
 
-echo "==> systemd service"
-sed "s#__USER__#$(whoami)#g; s#__REPO__#$REPO#g" deploy/mta-proxy.service \
-  | sudo tee /etc/systemd/system/mta-proxy.service > /dev/null
-sudo systemctl daemon-reload
-sudo systemctl enable mta-proxy > /dev/null
+echo "==> systemd services (server + 5-minute auto-update)"
+bash deploy/install_units.sh
 sudo systemctl restart mta-proxy
-chmod +x deploy/update.sh
+chmod +x deploy/*.sh
 
 echo "==> Health check"
 for i in 1 2 3 4 5; do
