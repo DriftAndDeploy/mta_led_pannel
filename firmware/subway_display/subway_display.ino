@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.0.0"
-#define FW_BUILD   600
+#define FW_VERSION "6.0.1"
+#define FW_BUILD   601
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -239,10 +239,54 @@ void generatePanelId() {
 }
 
 // ---------------------------------------------------------------------------
-// WiFi via WiFiManager. With no saved network it opens the "PanelSetup"
-// hotspot; connect a phone and browse to 192.168.4.1 if the page does not
-// pop up. The Panel ID stays on screen during setup.
+// WiFi setup. Two ways to give the panel a new network:
+//
+//   1. Phone/laptop: join the "PanelSetup" hotspot and open http://192.168.4.1
+//   2. USB cable: Arduino IDE > Tools > Serial Monitor (115200 baud,
+//      "Newline"), then type   NetworkName|password   and press Enter.
+//
+// Credentials are saved in flash either way, so this is only needed when the
+// network changes. The Panel ID stays on screen during setup.
 // ---------------------------------------------------------------------------
+const uint32_t PORTAL_TIMEOUT_MS = 600000;   // reboot + retry after 10 minutes
+
+// Reads "SSID|password" lines from the Serial Monitor.
+static bool readSerialCredentials(String& ssid, String& pass) {
+  static String line;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n') {
+      if (line.length() < 160) line += c;
+      continue;
+    }
+    String in = line;
+    line = "";
+    in.trim();
+    if (in.isEmpty()) continue;
+    int bar = in.indexOf('|');
+    if (bar <= 0) {
+      Serial.println("[setup] Type it as   NetworkName|password   (e.g. Test Test123|hunter2)");
+      continue;
+    }
+    ssid = in.substring(0, bar);
+    pass = in.substring(bar + 1);
+    return true;
+  }
+  return false;
+}
+
+static bool joinNetwork(const String& ssid, const String& pass) {
+  Serial.printf("[setup] Joining \"%s\"...\n", ssid.c_str());
+  showSplash("Joining", ssid.c_str(), panel_id);
+  WiFi.persistent(true);              // save to flash for next boot
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(250);
+  return WiFi.status() == WL_CONNECTED;
+}
+
 void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFiManager wm;
@@ -250,15 +294,41 @@ void connectWifi() {
     char idLine[16];
     snprintf(idLine, sizeof(idLine), "ID %s", panel_id);
     showSplash("CONNECT TO:", AP_NAME, idLine);
-    Serial.printf("Portal active — connect to: %s\n", AP_NAME);
+    Serial.printf("[setup] Hotspot \"%s\" is up at http://%s\n", AP_NAME,
+                  WiFi.softAPIP().toString().c_str());
+    Serial.println("[setup] Or type   NetworkName|password   here and press Enter.");
   });
-  wm.setConfigPortalTimeout(180);
   wm.setConnectTimeout(20);
+  wm.setConfigPortalTimeout(0);       // we handle the timeout below
+  wm.setConfigPortalBlocking(false);  // keep looping so Serial input works
 
   if (!wm.autoConnect(AP_NAME)) {
-    Serial.println("WiFiManager timed out — rebooting");
-    delay(500);
-    ESP.restart();
+    uint32_t started = millis(), last_log = 0;
+    String ssid, pass;
+    while (WiFi.status() != WL_CONNECTED) {
+      wm.process();                   // serves the 192.168.4.1 setup page
+
+      if (readSerialCredentials(ssid, pass)) {
+        wm.stopConfigPortal();
+        if (joinNetwork(ssid, pass)) break;
+        Serial.println("[setup] Could not join — check the name and password. Hotspot restarting.");
+        wm.startConfigPortal(AP_NAME);
+      }
+
+      if (millis() - last_log > 5000) {
+        last_log = millis();
+        Serial.printf("[setup] Waiting for WiFi details — %d device(s) on PanelSetup, free heap %lu\n",
+                      WiFi.softAPgetStationNum(), (unsigned long)ESP.getFreeHeap());
+      }
+      if (millis() - started > PORTAL_TIMEOUT_MS) {
+        Serial.println("[setup] No WiFi after 10 minutes — rebooting to retry the saved network");
+        delay(500);
+        ESP.restart();
+      }
+      delay(2);
+    }
+    wm.stopConfigPortal();            // no-op if WiFiManager already closed it
+    WiFi.mode(WIFI_STA);
   }
   WiFi.setAutoReconnect(true);
   Serial.printf("Connected: %s  RSSI %d\n",

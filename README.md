@@ -141,6 +141,10 @@ On power-up the Panel ID shows for 15 s; it also stays on the WiFi setup
 screen. With no known WiFi the panel opens the **PanelSetup** hotspot —
 connect, and if no page appears browse to `http://192.168.4.1`.
 
+If that page won't load, plug the panel into your PC instead: Arduino IDE →
+**Tools → Serial Monitor**, set **115200 baud** and **Newline**, then type
+`NetworkName|password` and press Enter. The panel saves it and connects.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -150,4 +154,5 @@ connect, and if no page appears browse to `http://192.168.4.1`.
 | `--:--` everywhere | MTA feed down — `sudo journalctl -u mta-proxy -n 50 --no-pager` |
 | OTA never starts | `curl https://whenisthetraincoming.com/firmware/info` shows the new build? Panel was flashed with the Minimal SPIFFS scheme? |
 | "UPDATE FAIL" on panel | Serial monitor at 115200 prints the reason; usually a partition-scheme mismatch |
+| PanelSetup page won't load | Use the Serial Monitor method above (USB cable) |
 | Faint glow next to lit pixels | Raise `LATCH_BLANKING` in the sketch (4 → 6 or 8) |
