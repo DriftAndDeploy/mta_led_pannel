@@ -402,20 +402,102 @@ _BULLET_RE = re.compile(r"\[([A-Z0-9]{1,3})\]")
 _ICON_RE   = re.compile(r"\[[^\]]*\]")
 
 
-def clean_alert_text(text: str, limit: int = 80) -> str:
+ALERT_LIMIT = 80   # panel ticker space (firmware buffer is 100)
+
+# Condensing, used only when an alert is too long. Each step is tried in
+# turn, and the first version that fits wins, so short alerts read exactly as
+# the MTA wrote them.
+_ABBREVIATIONS = [   # (pattern, replacement), applied case-insensitively
+    (r"\bare running with (?:some |severe |extensive )?delays\b", "are delayed"),
+    (r"\bis running with (?:some |severe |extensive )?delays\b", "is delayed"),
+    (r"\bare not running\b", "not running"),
+    (r"\bare running\b", "run"),
+    (r"\bis running\b", "runs"),
+    (r"\bafter we (?:addressed|responded to|removed|fixed|cleared)\b", "after"),
+    (r"\bwhile we (?:address|respond to|remove|clear)\b", "due to"),
+    (r"\bwhile (?:we|crews) (?:make|complete|perform) (?:repairs|track work|work)\b", "for repairs"),
+    (r"\bwhile we (?:fix|repair)\b", "to fix"),
+    (r"\bbecause of\b", "due to"),
+    (r"\bmechanical problems?\b", "mech problem"),
+    (r"\bsignal problems?\b", "signal issue"),
+    (r"\bswitch problems?\b", "switch issue"),
+    (r"\b(?:an |a )?earlier incident\b", "earlier incident"),
+    (r"\bin both directions\b", "both ways"),
+    (r"\bminutes\b", "min"),
+    (r"\bminute\b", "min"),
+    (r"\bnorthbound\b", "N/B"),
+    (r"\bsouthbound\b", "S/B"),
+    (r"\bmanhattan-bound\b", "Mhtn-bound"),
+    (r"\bbrooklyn-bound\b", "Bklyn-bound"),
+    (r"\bstreet\b", "St"),
+    (r"\bavenue\b", "Av"),
+    (r"\bboulevard\b", "Blvd"),
+    (r"\bparkway\b", "Pkwy"),
+    (r"\bsquare\b", "Sq"),
+    (r"\bjunction\b", "Jct"),
+    (r"\bcenter\b", "Ctr"),
+    (r"\bheights\b", "Hts"),
+    (r"\bstations\b", "stops"),
+    (r"\bstation\b", "stop"),
+    (r"\band\b", "&"),
+]
+# Trailing "why" clause; the "what" matters more on a 64 px panel.
+_REASON_RE = re.compile(
+    r"[,;]?\s+(?:while|after|as|because|due to|for|so|to fix|following)\b.*$", re.I)
+_FILLER_RE = re.compile(r"\b(?:the|some|currently|please|on a train|on the train)\s+", re.I)
+
+
+def normalize_alert_text(text: str) -> str:
+    text = re.sub(r"\](?=\[)", "]/", text)  # "[2][3]" -> "[2]/[3]"
     text = _BULLET_RE.sub(r"\1", text)      # "[A] trains" -> "A trains"
     text = _ICON_RE.sub("", text)           # drop "[accessibility icon]" etc.
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) > limit:
-        text = text[:limit - 3].rsplit(" ", 1)[0].rstrip(",;:") + "..."
-    return text
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _tidy(text: str) -> str:
+    text = re.sub(r"\s+([,.;:])", r"\1", re.sub(r"\s+", " ", text)).strip()
+    return text[:1].upper() + text[1:]
+
+
+def condense_alert_text(text: str, limit: int = ALERT_LIMIT) -> str:
+    """Shorten an alert to fit the panel, keeping as much meaning as possible."""
+    if len(text) <= limit:
+        return text
+    for pattern, repl in _ABBREVIATIONS:              # 1. abbreviate
+        text = re.sub(pattern, repl, text, flags=re.I)
+    text = _tidy(text)
+    if len(text) <= limit:
+        return text
+    text = re.split(r"(?<=[.!?])\s+", text)[0]       # 2. first sentence only
+    if len(text) <= limit:
+        return text
+    text = _tidy(_FILLER_RE.sub("", text))            # 3. drop filler words
+    if len(text) <= limit:
+        return text
+    m = _REASON_RE.search(text)                       # 4. drop the "why" clause...
+    what = (text[:m.start()] if m else text).rstrip(" .,;")
+    place = (m and not re.search(r"\b(?:at|near|between|from)\b", what)   # no location left?
+             and re.search(r"\b(at|near) ([A-Z0-9][^,;]*?)\.?$", m.group(0)))
+    if place and 12 < len(f"{what} {place[1]} {place[2]}.") <= limit:
+        return f"{what} {place[1]} {place[2]}."       # ...but keep where it is
+    what += "."
+    if 12 < len(what) <= limit:
+        return what
+    if len(what) > 12:
+        text = what
+    return text[:limit - 3].rsplit(" ", 1)[0].rstrip(",;:&-/") + "..."   # 5. last resort
+
+
+def clean_alert_text(text: str, limit: int = ALERT_LIMIT) -> str:
+    return condense_alert_text(normalize_alert_text(text), limit)
+
+
+_SUSPENDED_RE = re.compile(
+    r"suspend|no service|not running|not stopping|\bno (?:[a-z0-9]+[/ ])*(?:shuttle )?trains?\b", re.I)
 
 
 def classify_alert(text: str) -> int:
-    t = text.lower()
-    if any(w in t for w in ("suspend", "no service", "not running", "not stopping")):
-        return 2
-    return 1
+    return 2 if _SUSPENDED_RE.search(text) else 1
 
 
 def get_alerts() -> list[dict]:
@@ -435,14 +517,14 @@ def get_alerts() -> list[dict]:
                 continue
             # Prefer the plain English translation over the HTML one.
             raw = next((t.text for t in tr if t.language in ("en", "")), tr[0].text)
-            text = clean_alert_text(raw)
-            if not text:
+            full = normalize_alert_text(raw)
+            if not full:
                 continue
             alerts.append({
                 "routes":  {ie.route_id for ie in a.informed_entity if ie.route_id},
                 "periods": [(p.start or 0, p.end or 0) for p in a.active_period],
-                "text":    text,
-                "level":   classify_alert(text),
+                "text":    condense_alert_text(full),
+                "level":   classify_alert(full),   # judged on the full wording
             })
         return alerts
 

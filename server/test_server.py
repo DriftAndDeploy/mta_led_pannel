@@ -53,12 +53,47 @@ class DepartureLogic(unittest.TestCase):
 class Alerts(unittest.TestCase):
     def test_clean_text_keeps_line_letters(self):
         self.assertEqual(ps.clean_alert_text("Uptown [A][C] trains are delayed [accessibility icon]"),
-                         "Uptown AC trains are delayed")
+                         "Uptown A/C trains are delayed")
 
     def test_truncates_on_word_boundary(self):
         out = ps.clean_alert_text("word " * 40)
         self.assertLessEqual(len(out), 80)
         self.assertTrue(out.endswith("..."))
+
+    def test_short_alerts_are_untouched(self):
+        t = "7 trains are running with delays."
+        self.assertEqual(ps.clean_alert_text(t), t)
+
+    def test_long_alerts_are_condensed_not_cut(self):
+        cases = {
+            "Northbound [A] trains are running with delays after we addressed a mechanical problem "
+            "on a train at 59 St-Columbus Circle.":
+                "N/B A trains are delayed after a mech problem at 59 St-Columbus Circle.",
+            "[L] trains are running every 12 minutes between Broadway Junction and 8 Av while we make "
+            "repairs to the signal system.":
+                "L trains run every 12 min between Broadway Jct & 8 Av.",
+            "Southbound [N][Q][R][W] trains are delayed while we respond to a person being struck by a "
+            "train at Times Sq-42 St.":
+                "S/B N/Q/R/W trains are delayed at Times Sq-42 St.",
+            "No [G] trains running between Court Sq and Bedford-Nostrand Avs. Take shuttle buses "
+            "instead. Allow additional travel time.":
+                "No G trains running between Court Sq & Bedford-Nostrand Avs.",
+            "Some northbound [2][3] trains are running on the [4][5] line from Chambers Street to 96 "
+            "Street because of a switch problem at 72 St.":
+                "N/B 2/3 trains run on 4/5 line from Chambers St to 96 St.",
+        }
+        for raw, want in cases.items():
+            out = ps.clean_alert_text(raw)
+            self.assertEqual(out, want)
+            self.assertLessEqual(len(out), ps.ALERT_LIMIT)
+            self.assertFalse(out.endswith("..."))
+
+    def test_suspension_detected_on_full_text(self):
+        self.assertEqual(ps.classify_alert("No G trains running between Court Sq and Bedford"), 2)
+        self.assertEqual(ps.classify_alert("No 2/3 trains between 96 St and 242 St"), 2)
+        self.assertEqual(ps.classify_alert("S trains are not running between X and Y"), 2)
+        self.assertEqual(ps.classify_alert("A trains are delayed"), 1)
+        self.assertEqual(ps.classify_alert("Trains are running with delays, no other changes"), 1)
 
     def test_expired_ignored_and_most_severe_wins(self):
         now = 1_000_000
