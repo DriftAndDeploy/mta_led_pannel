@@ -547,6 +547,8 @@ def next_trains():
         "time_r": cfg["time_r"], "time_g": cfg["time_g"], "time_b": cfg["time_b"],
         "fw_build":       fw["build"] if fw else 0,
         "error":          error,
+        # seconds of diagnostic test pattern left (0 = normal display)
+        "test_pattern":   max(0, int(cfg.get("test_until", 0) - time.time())),
     }
     if wifi_new:
         payload["wifi_new"] = wifi_new
@@ -576,6 +578,18 @@ def api_config():
         save_config(pid, cfg)
     log.info("Config updated [%s]: %s", pid, update)
     return jsonify({"ok": True, "config": public_config(cfg)})
+
+
+@app.post("/api/test-pattern")
+def api_test_pattern():
+    """Show the panel test pattern for 60 s (dead-LED / signal check)."""
+    pid = require_panel_id()
+    with _config_lock:
+        cfg = load_config(pid)
+        cfg["test_until"] = int(time.time()) + 60
+        save_config(pid, cfg)
+    log.info("Test pattern requested for panel %s", pid)
+    return jsonify({"ok": True, "seconds": 60})
 
 
 @app.get("/api/status")

@@ -203,6 +203,18 @@ class WifiHandoff(unittest.TestCase):
         self.assertNotIn("wifi_new", self.poll("WF0004"))   # can't inject via /api/config
 
 
+class TestPattern(unittest.TestCase):
+    def test_request_sets_countdown(self):
+        c = ps.app.test_client()
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)):
+            self.assertEqual(c.get("/next-trains?panel_id=TP0001").get_json()["test_pattern"], 0)
+            self.assertEqual(c.post("/api/test-pattern?panel_id=TP0001").status_code, 200)
+            left = c.get("/next-trains?panel_id=TP0001").get_json()["test_pattern"]
+        self.assertTrue(55 <= left <= 60)
+        self.assertNotIn("test_until", ps.CONFIG_SCHEMA)   # not settable via /api/config
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

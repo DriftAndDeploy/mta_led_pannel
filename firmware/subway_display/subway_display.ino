@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.3.0"
-#define FW_BUILD   630
+#define FW_VERSION "6.4.0"
+#define FW_BUILD   640
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -80,7 +80,8 @@ struct PanelState {
   uint8_t  time_r = 255, time_g = 255, time_b = 255;
   uint8_t  brightness     = 80;
   uint8_t  latch_blanking = LATCH_BLANKING;
-  uint8_t  service_status = 0;      // 0 normal, 1 delays/changes, 2 suspended
+  uint8_t  service_status = 0;
+  uint16_t test_s         = 0;      // seconds of test pattern requested      // 0 normal, 1 delays/changes, 2 suspended
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
   bool     panel_off      = false;
@@ -141,6 +142,7 @@ void drawNormal(const PanelState& s);
 void drawMinimalist(const PanelState& s);
 void drawLogoAt(int cx, int cy, const PanelState& s);
 void drawStatusDot(uint8_t status);
+void drawTestPattern();
 void drawOtaScreen();
 void showPanelIdSplash();
 void showSplash(const char* line1, const char* line2 = nullptr, const char* line3 = nullptr);
@@ -548,6 +550,7 @@ bool fetchTrainTimes() {
   n.brightness     = constrain((int)(doc["brightness"] | 80), 0, 100);
   n.latch_blanking = constrain((int)(doc["latch_blanking"] | (int)LATCH_BLANKING), 1, 8);
   n.service_status = doc["service_status"] | 0;
+  n.test_s         = doc["test_pattern"] | 0;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
   n.panel_off      = (doc["panel_off"]  | 0) != 0;
@@ -653,6 +656,13 @@ void render(const PanelState& in) {
   if (s.panel_off) {
     dma_display->clearScreen();
     present();
+    return;
+  }
+
+  // Diagnostic test pattern (Settings > Test Pattern), counted from when
+  // the server told us about it.
+  if (s.test_s && millis() - s.updated_ms < (uint32_t)s.test_s * 1000UL) {
+    drawTestPattern();
     return;
   }
 
@@ -762,6 +772,23 @@ void drawStatusDot(uint8_t status) {
              :               dma_display->color565(  0, 200,  80);  // good
   // 2x2 block in the top-left corner, 1 px in from the top and left edges.
   dma_display->fillRect(1, 1, 2, 2, c);
+}
+
+// Cycles every 4 s: green 2x2 dots -> yellow 2x2 dots -> dim full white.
+// Dots sit in all four corners (1 px in from the edges, like the status dot)
+// and the centre. A pixel missing from every dot means a signal problem;
+// one missing in only one spot (or a dark LED on white) means a bad LED.
+void drawTestPattern() {
+  static const int16_t spots[][2] = {{1, 1}, {61, 1}, {1, 29}, {61, 29}, {31, 15}};
+  uint8_t phase = (millis() / 4000) % 3;
+  dma_display->clearScreen();
+  if (phase == 2) {
+    dma_display->fillRect(0, 0, PANEL_RES_X, PANEL_RES_Y, dma_display->color565(80, 80, 80));
+  } else {
+    uint16_t c = phase == 0 ? dma_display->color565(0, 200, 80) : dma_display->color565(255, 200, 0);
+    for (auto& p : spots) dma_display->fillRect(p[0], p[1], 2, 2, c);
+  }
+  present();
 }
 
 void drawOtaScreen() {

@@ -1000,6 +1000,13 @@
           <button class="step-btn" onclick="adjustLatch(1)" aria-label="More">+</button>
         </div>
       </div>
+      <div class="settings-row">
+        <div>
+          <span class="toggle-label">Test Pattern</span>
+          <div class="toggle-hint">60 s: 2×2 dots in each corner + centre, then full white · spots dead LEDs</div>
+        </div>
+        <button class="settings-link-btn" id="test-btn" onclick="runTestPattern()">RUN</button>
+      </div>
     </div>
 
     <div class="settings-group">
@@ -1076,7 +1083,7 @@ let latchTimer       = null;
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = path.startsWith('/api/config') || path.startsWith('/api/status')
+  const url = ['/api/config', '/api/status', '/api/test-pattern'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1181,6 +1188,19 @@ async function refreshStatus() {
     txt.textContent = 'Server unreachable';
   }
   refreshWifi();
+}
+
+// ── Panel test pattern ───────────────────────────────────────────────────
+async function runTestPattern() {
+  const btn = document.getElementById('test-btn');
+  btn.disabled = true;
+  try {
+    await api('/api/test-pattern', {});
+    showToast('Test pattern starts within 15 s and runs for 60 s');
+  } catch (e) {
+    showToast('Could not start — ' + e.message);
+  }
+  setTimeout(() => { btn.disabled = false; }, 15000);
 }
 
 // ── Settings sheet ────────────────────────────────────────────────────────
