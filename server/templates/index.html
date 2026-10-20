@@ -916,6 +916,16 @@
   </div>
   <div class="toggle-row">
     <div>
+      <span class="toggle-label">Show Weather</span>
+      <div class="toggle-hint" id="weather-hint">Temperature + icon · ☂ when rain is likely · saves instantly</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-weather" onchange="saveWeather(this.checked)">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="toggle-row">
+    <div>
       <span class="toggle-label">Minimalist Mode</span>
       <div class="toggle-hint">Logo + time centered · status dot · no scroll text</div>
     </div>
@@ -1083,7 +1093,7 @@ let latchTimer       = null;
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1316,6 +1326,8 @@ async function init() {
   document.getElementById('toggle-alerts').checked     = cfg.show_alerts !== false;
   document.getElementById('toggle-minimalist').checked = !!cfg.minimalist;
   document.getElementById('toggle-demo').checked       = !!cfg.demo;
+  document.getElementById('toggle-weather').checked    = !!cfg.show_weather;
+  refreshWeatherHint();
   document.getElementById('demo-banner').classList.toggle('show', !!cfg.demo);
   updateMinimalistUI();
   updatePowerButton();
@@ -1435,6 +1447,31 @@ function updateMinimalistUI() {
     document.getElementById(id).closest('.toggle-row').style.opacity = on ? '0.35' : '1');
 }
 
+const WEATHER_HINT = 'Temperature + icon · ☂ when rain is likely · saves instantly';
+const WEATHER_WORDS = { sun: 'clear', moon: 'clear', partly: 'partly cloudy', cloud: 'cloudy',
+                        rain: 'rain', snow: 'snow', storm: 'storms' };
+
+async function saveWeather(on) {
+  if (!await patchConfig({ show_weather: on }, on ? 'Weather on — panel updates within 15 s' : 'Weather off')) {
+    document.getElementById('toggle-weather').checked = !on;
+  }
+  refreshWeatherHint();
+}
+
+// Show what the panel will display, so the toggle is easy to check.
+async function refreshWeatherHint() {
+  const hint = document.getElementById('weather-hint');
+  if (!document.getElementById('toggle-weather').checked) { hint.textContent = WEATHER_HINT; return; }
+  try {
+    const w = await api('/api/weather');
+    hint.textContent = !w.ok ? 'Weather unavailable right now — panel hides it until it\'s back'
+      : `Now ${w.temp}°F · ${WEATHER_WORDS[w.icon] || w.icon} · ` +
+        (w.umbrella ? `☂ bring an umbrella (${w.rain_chance}% rain)` : `no umbrella needed (${w.rain_chance}% rain)`);
+  } catch (e) {
+    hint.textContent = WEATHER_HINT;
+  }
+}
+
 async function saveDemo(on) {
   document.getElementById('demo-banner').classList.toggle('show', on);
   if (!await patchConfig({ demo: on }, on ? 'Demo mode on' : 'Demo mode off')) {
@@ -1541,6 +1578,7 @@ async function saveConfig() {
 
   btn.disabled = false;
   btn.textContent = 'SAVE TO PANEL';
+  if (ok) refreshWeatherHint();   // station may have changed
   if (ok) {
     btn.style.background = '#3a3';
     btn.style.color = '#fff';

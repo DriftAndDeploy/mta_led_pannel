@@ -215,6 +215,71 @@ class TestPattern(unittest.TestCase):
         self.assertNotIn("test_until", ps.CONFIG_SCHEMA)   # not settable via /api/config
 
 
+class Weather(unittest.TestCase):
+    SAMPLE = {"current": {"temperature_2m": 51.6, "weather_code": 3, "is_day": 1},
+              "hourly": {"precipitation_probability": [10, 20, 65, 30]}}
+
+    def setUp(self):
+        ps.cache._data.clear()
+        ps._weather_failed.clear()
+
+    def test_station_coordinates_from_gtfs(self):
+        lat, lon = ps.station_coords("L14")
+        self.assertAlmostEqual(lat, 40.706, places=2)
+        self.assertAlmostEqual(lon, -73.933, places=2)
+        self.assertEqual(ps.station_coords("NOPE"), ps.NYC_CENTER)
+
+    def test_icons(self):
+        self.assertEqual(ps.weather_icon(0, True), "sun")
+        self.assertEqual(ps.weather_icon(0, False), "moon")
+        self.assertEqual(ps.weather_icon(2, True), "partly")
+        self.assertEqual(ps.weather_icon(45, True), "cloud")
+        self.assertEqual(ps.weather_icon(63, True), "rain")
+        self.assertEqual(ps.weather_icon(81, False), "rain")
+        self.assertEqual(ps.weather_icon(73, True), "snow")
+        self.assertEqual(ps.weather_icon(95, True), "storm")
+
+    def test_umbrella_rule(self):
+        w = ps.parse_weather(self.SAMPLE)
+        self.assertEqual((w["temp"], w["icon"], w["rain_chance"], w["umbrella"]), (52, "cloud", 65, True))
+        dry = {"current": {"temperature_2m": 70, "weather_code": 0, "is_day": 1},
+               "hourly": {"precipitation_probability": [0, 10, None, 49]}}
+        self.assertFalse(ps.parse_weather(dry)["umbrella"])
+        raining = {"current": {"temperature_2m": 60, "weather_code": 61, "is_day": 1}, "hourly": {}}
+        self.assertTrue(ps.parse_weather(raining)["umbrella"])   # raining now
+
+    def _resp(self):
+        return mock.Mock(json=lambda: self.SAMPLE, raise_for_status=lambda: None)
+
+    def test_payload_off_by_default_and_on_when_toggled(self):
+        c = ps.app.test_client()
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)), \
+             mock.patch.object(ps.requests, "get", return_value=self._resp()) as get:
+            self.assertEqual(c.get("/next-trains?panel_id=WX0001").get_json()["wx"], 0)
+            get.assert_not_called()
+            c.post("/api/config?panel_id=WX0001", json={"show_weather": True})
+            j = c.get("/next-trains?panel_id=WX0001").get_json()
+            c.get("/next-trains?panel_id=WX0001")          # cached: no second fetch
+            self.assertEqual(get.call_count, 1)
+            self.assertEqual(get.call_args.kwargs["params"]["temperature_unit"], "fahrenheit")
+            info = c.get("/api/weather?panel_id=WX0001").get_json()
+        self.assertEqual((j["wx"], j["wx_temp"], j["wx_icon"], j["wx_umbrella"]),
+                         (1, 52, ps.WX_ICONS["cloud"], 1))
+        self.assertEqual((info["ok"], info["rain_chance"]), (True, 65))
+
+    def test_weather_outage_hides_strip_and_backs_off(self):
+        c = ps.app.test_client()
+        c.post("/api/config?panel_id=WX0002", json={"show_weather": True})
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)), \
+             mock.patch.object(ps.requests, "get", side_effect=ps.requests.Timeout()) as get:
+            j = c.get("/next-trains?panel_id=WX0002").get_json()
+            c.get("/next-trains?panel_id=WX0002")
+        self.assertEqual((j["wx"], j["train_time"]), (0, "--:--"))
+        self.assertEqual(get.call_count, 1)   # no retry for WEATHER_RETRY_S
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

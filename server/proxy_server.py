@@ -8,12 +8,15 @@ Runs on the Raspberry Pi behind the Cloudflare tunnel (whenisthetraincoming.com)
   * /api/...            JSON endpoints used by the web app
   * /firmware/...       over-the-air firmware updates for the panels
 
+Weather comes from Open-Meteo (free, no API key) for the panel's station.
+
 Run locally:  python proxy_server.py        (http://localhost:5000)
 On the Pi it runs as the mta-proxy systemd service — see README.md.
 """
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import logging
@@ -28,6 +31,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, abort, jsonify, render_template, request, send_file
+import nyct_gtfs
 from nyct_gtfs import NYCTFeed
 from nyct_gtfs.compiled_gtfs import gtfs_realtime_pb2
 
@@ -48,6 +52,14 @@ STATIONS_TTL_S   = 3600
 MAX_STALE_S      = 300    # serve cached data this long if the MTA is down
 DEMO_INTERVAL_S  = 45     # demo mode: new line every 45 s
 ONLINE_WINDOW_S  = 60     # a panel counts as online if seen within this window
+
+WEATHER_URL       = "https://api.open-meteo.com/v1/forecast"
+WEATHER_TTL_S     = 900    # Open-Meteo updates current conditions every 15 min
+WEATHER_TIMEOUT_S = 4      # keep a slow weather API from delaying the panel
+WEATHER_RETRY_S   = 120    # after a failed fetch, wait this long before retrying
+UMBRELLA_HOURS    = 12     # look this far ahead for rain
+UMBRELLA_CHANCE   = 50     # % chance of rain in any of those hours -> umbrella
+NYC_CENTER        = (40.7128, -74.0060)
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -103,6 +115,7 @@ DEFAULT_CONFIG = {
     "time_b":        255,
     "auto_update":   True,
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
+    "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
 }
 
 
@@ -141,6 +154,12 @@ class TTLCache:
             with self._lock:
                 self._data[key] = (time.monotonic(), value)
             return value
+
+    def peek(self, key, max_age: float):
+        """Cached value if younger than max_age, without refreshing."""
+        with self._lock:
+            hit = self._data.get(key)
+        return hit[1] if hit and time.monotonic() - hit[0] < max_age else None
 
 
 cache = TTLCache()
@@ -231,6 +250,7 @@ CONFIG_SCHEMA = {
     "time_b":        _int_range(0, 255),
     "auto_update":   _bool,
     "latch_blanking": _int_range(1, 8),
+    "show_weather":  _bool,
 }
 
 
@@ -483,6 +503,87 @@ def firmware_download():
 
 # ── Panel endpoint ────────────────────────────────────────────────────────
 
+# ── Weather ───────────────────────────────────────────────────────────────
+
+# Icon numbers the firmware draws (0 = none).
+WX_ICONS = {"sun": 1, "moon": 2, "partly": 3, "cloud": 4, "rain": 5, "snow": 6, "storm": 7}
+
+_station_coords: dict | None = None
+
+
+def station_coords(stop_parent: str) -> tuple[float, float]:
+    """Lat/lon of a station from the GTFS stops list bundled with nyct_gtfs."""
+    global _station_coords
+    if _station_coords is None:
+        coords = {}
+        path = os.path.join(os.path.dirname(nyct_gtfs.__file__), "gtfs_static", "stops.txt")
+        try:
+            with open(path, newline="") as f:
+                for row in csv.DictReader(f):
+                    if not row.get("parent_station"):
+                        coords[row["stop_id"]] = (float(row["stop_lat"]), float(row["stop_lon"]))
+        except (OSError, ValueError, KeyError):
+            log.exception("Could not read station coordinates — weather uses central NYC")
+        _station_coords = coords
+    return _station_coords.get(stop_parent, NYC_CENTER)
+
+
+def weather_icon(code: int, is_day: bool) -> str:
+    """WMO weather code -> one of WX_ICONS."""
+    if code in (0, 1):
+        return "sun" if is_day else "moon"
+    if code == 2:
+        return "partly" if is_day else "cloud"
+    if 51 <= code <= 67 or 80 <= code <= 82:
+        return "rain"
+    if 71 <= code <= 77 or code in (85, 86):
+        return "snow"
+    if code >= 95:
+        return "storm"
+    return "cloud"   # overcast, fog
+
+
+def parse_weather(data: dict) -> dict:
+    cur = data["current"]
+    icon = weather_icon(int(cur["weather_code"]), bool(cur.get("is_day", 1)))
+    chances = [p for p in (data.get("hourly", {}).get("precipitation_probability") or [])
+               if p is not None][:UMBRELLA_HOURS]
+    rain_chance = int(max(chances, default=0))
+    umbrella = icon in ("rain", "storm") or rain_chance >= UMBRELLA_CHANCE
+    return {"temp": int(round(float(cur["temperature_2m"]))), "icon": icon,
+            "rain_chance": rain_chance, "umbrella": umbrella}
+
+
+_weather_failed: dict = {}
+
+
+def get_weather(stop_parent: str) -> dict | None:
+    """Current weather at a station, or None if Open-Meteo can't be reached."""
+    lat, lon = station_coords(stop_parent)
+    key = ("weather", round(lat, 2), round(lon, 2))
+
+    def load():
+        r = requests.get(WEATHER_URL, timeout=WEATHER_TIMEOUT_S, params={
+            "latitude": key[1], "longitude": key[2],
+            "current": "temperature_2m,weather_code,is_day",
+            "hourly": "precipitation_probability",
+            "forecast_hours": UMBRELLA_HOURS,
+            "temperature_unit": "fahrenheit",
+            "timezone": "America/New_York",
+        })
+        r.raise_for_status()
+        return parse_weather(r.json())
+
+    if time.monotonic() - _weather_failed.get(key, -WEATHER_RETRY_S) < WEATHER_RETRY_S:
+        return cache.peek(key, MAX_STALE_S)
+    try:
+        return cache.get(key, WEATHER_TTL_S, load)
+    except Exception:
+        log.warning("Weather unavailable for %s", stop_parent, exc_info=True)
+        _weather_failed[key] = time.monotonic()
+        return None
+
+
 def demo_selection(panel_id: str, slot: int) -> tuple[str, dict | None, str]:
     """Deterministic random line/station/platform for a 45 s demo slot."""
     rng = random.Random(f"{panel_id}:{slot}")
@@ -527,6 +628,7 @@ def next_trains():
     alert_text, level = alert_for_line(line, now.timestamp())
     r, g, b = hex_to_rgb(LINE_COLORS.get(line, "#888888"))
     fw = firmware_info() if cfg["auto_update"] else None
+    wx = get_weather(stop_parent) if cfg["show_weather"] else None
 
     # Always 200: even when the MTA is down the panel still needs its
     # brightness / power / colour settings.
@@ -547,6 +649,11 @@ def next_trains():
         "time_r": cfg["time_r"], "time_g": cfg["time_g"], "time_b": cfg["time_b"],
         "fw_build":       fw["build"] if fw else 0,
         "error":          error,
+        # weather strip: wx=0 hides it (turned off, or no weather data)
+        "wx":             1 if wx else 0,
+        "wx_temp":        wx["temp"] if wx else 0,
+        "wx_icon":        WX_ICONS.get(wx["icon"], 0) if wx else 0,
+        "wx_umbrella":    1 if wx and wx["umbrella"] else 0,
         # seconds of diagnostic test pattern left (0 = normal display)
         "test_pattern":   max(0, int(cfg.get("test_until", 0) - time.time())),
     }
@@ -590,6 +697,16 @@ def api_test_pattern():
         save_config(pid, cfg)
     log.info("Test pattern requested for panel %s", pid)
     return jsonify({"ok": True, "seconds": 60})
+
+
+@app.get("/api/weather")
+def api_weather():
+    """Weather the panel would show right now (for the web app's toggle hint)."""
+    cfg = load_config(require_panel_id())
+    wx = get_weather(cfg["stop_parent"])
+    if not wx:
+        return jsonify({"ok": False})
+    return jsonify({"ok": True, "station": cfg["stop_name"], **wx})
 
 
 @app.get("/api/status")

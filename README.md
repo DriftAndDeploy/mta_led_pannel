@@ -143,6 +143,12 @@ protects against crashes, not against firmware that runs but misbehaves.
   "Leave by" (white) and service alert (yellow) along the bottom.
 - **Minimalist:** bullet + time centred, with a 2×2 status dot in the top-left
   corner (green normal, yellow alerts/changes, red suspended).
+- **Weather** (optional, **Display Options → Show Weather**): icon + temperature
+  (°F) for the selected station, plus an **umbrella** icon when there's at least
+  a 50% chance of rain in the next 12 hours (or it's raining now). Normal mode
+  shows it beside the bullet, or at the front of the scrolling text; minimalist
+  mode shows it centred under the time. Data from Open-Meteo (free, no key),
+  refreshed every 15 min; if it can't be reached the panel just hides it.
 - **Demo:** the server rotates a random line/station every 45 s — runs on the
   Pi, so it keeps going with the phone closed.
 - Train time shows `--:--` if the panel hasn't heard from the server for 3 minutes.

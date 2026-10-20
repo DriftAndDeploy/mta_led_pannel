@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.4.1"
-#define FW_BUILD   641
+#define FW_VERSION "6.5.0"
+#define FW_BUILD   650
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -80,8 +80,12 @@ struct PanelState {
   uint8_t  time_r = 255, time_g = 255, time_b = 255;
   uint8_t  brightness     = 80;
   uint8_t  latch_blanking = LATCH_BLANKING;
-  uint8_t  service_status = 0;
-  uint16_t test_s         = 0;      // seconds of test pattern requested      // 0 normal, 1 delays/changes, 2 suspended
+  uint8_t  service_status = 0;      // 0 normal, 1 delays/changes, 2 suspended
+  uint16_t test_s         = 0;      // seconds of test pattern requested
+  bool     wx_show        = false;  // weather strip on and data available
+  int16_t  wx_temp        = 0;      // degrees F
+  uint8_t  wx_icon        = 0;      // WX_* below (0 = none)
+  bool     wx_umbrella    = false;  // rain likely in the next 12 h
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
   bool     panel_off      = false;
@@ -142,6 +146,24 @@ void drawNormal(const PanelState& s);
 void drawMinimalist(const PanelState& s);
 void drawLogoAt(int cx, int cy, const PanelState& s);
 void drawStatusDot(uint8_t status);
+int  drawRun(const char* text, int x, int y, uint16_t color);
+int  runWidth(const char* text);
+void buildWeatherText(const PanelState& s);
+
+// Weather icon numbers (match WX_ICONS in server/proxy_server.py) and the
+// control characters used for icons inside ticker text.
+#define WX_SUN 1
+#define WX_MOON 2
+#define WX_PARTLY 3
+#define WX_CLOUD 4
+#define WX_RAIN 5
+#define WX_SNOW 6
+#define WX_STORM 7
+#define CH_UMBRELLA '\x10'
+#define CH_DEGREE   '\x11'
+#define CH_GAP      '\x12'   // 3 px spacer
+#define WX_TEXT_COLOR dma_display->color565(150, 200, 255)
+
 void drawTestPattern();
 void drawOtaScreen();
 void showPanelIdSplash();
@@ -551,6 +573,10 @@ bool fetchTrainTimes() {
   n.latch_blanking = constrain((int)(doc["latch_blanking"] | (int)LATCH_BLANKING), 1, 8);
   n.service_status = doc["service_status"] | 0;
   n.test_s         = doc["test_pattern"] | 0;
+  n.wx_show        = (doc["wx"] | 0) != 0;
+  n.wx_temp        = doc["wx_temp"] | 0;
+  n.wx_icon        = doc["wx_icon"] | 0;
+  n.wx_umbrella    = (doc["wx_umbrella"] | 0) != 0;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
   n.panel_off      = (doc["panel_off"]  | 0) != 0;
@@ -628,6 +654,7 @@ static int      scroll_x       = PANEL_RES_X;
 static uint32_t scroll_version = 0;
 static char     leave_part[24]  = "";
 static char     alert_part[110] = "";
+static char     wx_part[16]     = "";   // icon, temp, degree sign, umbrella
 static int      last_brightness = -1;
 static int      last_latch      = -1;
 
@@ -638,6 +665,7 @@ void render(const PanelState& in) {
   if (millis() - s.updated_ms > STALE_MS) {
     copyStr(s.train_time, sizeof(s.train_time), "--:--");
     s.leave_by[0] = '\0';
+    s.wx_show = false;
   }
 
   // Latch blanking is baked into the panel's timing data when brightness is
@@ -674,10 +702,11 @@ void render(const PanelState& in) {
     else          leave_part[0] = '\0';
     if (hasAlert) snprintf(alert_part, sizeof(alert_part), "> %s  ", s.alert_msg);
     else          alert_part[0] = '\0';
+    buildWeatherText(s);
     // Only restart the scroll if the text itself changed.
-    static char last_text[140] = "";
-    char text[140];
-    snprintf(text, sizeof(text), "%s%s", leave_part, alert_part);
+    static char last_text[160] = "";
+    char text[160];
+    snprintf(text, sizeof(text), "%s%s%s", wx_part, leave_part, alert_part);
     if (strcmp(text, last_text) != 0) {
       copyStr(last_text, sizeof(last_text), text);
       scroll_x = PANEL_RES_X;
@@ -704,44 +733,48 @@ void drawNormal(const PanelState& s) {
   dma_display->setCursor(max(0, (PANEL_RES_X - textWidth) / 2), 0);
   dma_display->print(s.train_time);
 
-  int leave_len = strlen(leave_part);
-  int alert_len = strlen(alert_part);
-  bool scrolling = (leave_len + alert_len) > 0;
+  const int WX_GAP = 12;          // space after the weather in the ticker
+  bool weather   = s.wx_show && wx_part[0];
+  bool scrolling = (leave_part[0] || alert_part[0]);
 
+  dma_display->setTextSize(1);
   if (scrolling) {
-    dma_display->setTextSize(1);
     int cx = scroll_x;
-    dma_display->setTextColor(dma_display->color565(255, 255, 255));   // leave by: white
-    for (int i = 0; i < leave_len; i++, cx += 6) {
-      if (cx > -6 && cx < PANEL_RES_X) { dma_display->setCursor(cx, TEXT_Y); dma_display->write(leave_part[i]); }
-    }
-    dma_display->setTextColor(dma_display->color565(255, 220, 0));     // alert: yellow
-    for (int i = 0; i < alert_len; i++, cx += 6) {
-      if (cx > -6 && cx < PANEL_RES_X) { dma_display->setCursor(cx, TEXT_Y); dma_display->write(alert_part[i]); }
-    }
+    if (weather) cx = drawRun(wx_part, cx, TEXT_Y, WX_TEXT_COLOR) + WX_GAP;
+    cx = drawRun(leave_part, cx, TEXT_Y, dma_display->color565(255, 255, 255));  // leave by: white
+    cx = drawRun(alert_part, cx, TEXT_Y, dma_display->color565(255, 220, 0));    // alert: yellow
     // Clip: blank the logo column so glyphs slide smoothly under its edge.
     dma_display->fillRect(0, 16, SCROLL_MIN, 16, 0);
 
     scroll_x--;
-    if (scroll_x < SCROLL_MIN - (leave_len + alert_len) * 6) scroll_x = PANEL_RES_X;
+    if (cx < SCROLL_MIN) scroll_x = PANEL_RES_X;   // whole ticker has passed
+  } else if (weather) {
+    // Nothing to scroll: weather sits still beside the logo.
+    int w = runWidth(wx_part);
+    drawRun(wx_part, SCROLL_MIN + (PANEL_RES_X - SCROLL_MIN - w) / 2, TEXT_Y, WX_TEXT_COLOR);
   }
 
-  drawLogoAt(scrolling ? 8 : 32, 24, s);
+  drawLogoAt(scrolling || weather ? 8 : 32, 24, s);
 }
 
 // Minimalist layout: [logo][5px][time] centred as one unit + status dot.
+// With weather on, that row moves up 3 px and the weather sits centred below.
 void drawMinimalist(const PanelState& s) {
   const int GAP = 5;
+  bool weather   = s.wx_show && wx_part[0];
+  int cy         = weather ? 13 : 16;   // logo centre row
   int timeWidth  = strlen(s.train_time) * 6;
   int totalWidth = 14 + GAP + timeWidth;
   int startX     = (PANEL_RES_X - totalWidth) / 2;
 
-  drawLogoAt(startX + 7, 16, s);
+  drawLogoAt(startX + 7, cy, s);
 
   dma_display->setTextSize(1);
   dma_display->setTextColor(dma_display->color565(s.time_r, s.time_g, s.time_b));
-  dma_display->setCursor(startX + 14 + GAP, 12);
+  dma_display->setCursor(startX + 14 + GAP, cy - 4);
   dma_display->print(s.train_time);
+
+  if (weather) drawRun(wx_part, (PANEL_RES_X - runWidth(wx_part)) / 2, 24, WX_TEXT_COLOR);
 
   drawStatusDot(s.service_status);
 }
@@ -774,6 +807,101 @@ void drawStatusDot(uint8_t status) {
   // working LEDs at (0,2) and (1,2) (same spot mirrored in every corner),
   // so the dot starts at x=2 to stay clear of them.
   dma_display->fillRect(2, 1, 2, 2, c);
+}
+
+// ---------------------------------------------------------------------------
+// Weather strip. Icons are 7x7 bitmaps (bit 6 = leftmost pixel) that ride in
+// the ticker text as control characters, so they scroll with it:
+//   '\x01'-'\x07' weather icon (same numbers as the server's WX_ICONS)
+//   '\x10' umbrella, '\x11' degree sign, '\x12' 3 px gap
+// ---------------------------------------------------------------------------
+// (WX_* / CH_* constants are defined near the top of the file.)
+
+static const uint8_t BMP_SUN[7]      = {0x08, 0x22, 0x1C, 0x5D, 0x1C, 0x22, 0x08};
+static const uint8_t BMP_MOON[7]     = {0x1C, 0x38, 0x70, 0x70, 0x70, 0x38, 0x1C};
+static const uint8_t BMP_CLOUD[7]    = {0x00, 0x0C, 0x3E, 0x7F, 0x7F, 0x3E, 0x00};
+static const uint8_t BMP_SMALLSUN[4] = {0x38, 0x7C, 0x7C, 0x38};               // rows 0-3
+static const uint8_t BMP_SIDECLOUD[4]= {0x06, 0x1F, 0x3F, 0x1F};               // rows 3-6
+static const uint8_t BMP_TOPCLOUD[4] = {0x0C, 0x3E, 0x7F, 0x3E};               // rows 0-3
+static const uint8_t BMP_DROPS[2]    = {0x2A, 0x54};                           // rows 5-6
+static const uint8_t BMP_FLAKES[2]   = {0x55, 0x2A};                           // rows 5-6
+static const uint8_t BMP_BOLT[3]     = {0x18, 0x0C, 0x18};                     // rows 4-6
+static const uint8_t BMP_CANOPY[3]   = {0x1C, 0x3E, 0x7F};                     // rows 0-2
+static const uint8_t BMP_HANDLE[4]   = {0x08, 0x08, 0x28, 0x10};               // rows 3-6
+
+static void drawBits(int x, int y, const uint8_t* rows, uint8_t n, uint16_t c) {
+  for (uint8_t r = 0; r < n; r++)
+    for (uint8_t b = 0; b < 7; b++)
+      if (rows[r] & (0x40 >> b)) dma_display->drawPixel(x + b, y + r, c);
+}
+
+static void drawWxIcon(int x, int y, uint8_t icon) {
+  uint16_t grey   = dma_display->color565(150, 150, 165);
+  uint16_t yellow = dma_display->color565(255, 190, 0);
+  switch (icon) {
+    case WX_SUN:    drawBits(x, y, BMP_SUN, 7, yellow); break;
+    case WX_MOON:   drawBits(x, y, BMP_MOON, 7, dma_display->color565(210, 210, 160)); break;
+    case WX_PARTLY: drawBits(x, y, BMP_SMALLSUN, 4, yellow);
+                    drawBits(x, y + 3, BMP_SIDECLOUD, 4, grey); break;
+    case WX_RAIN:   drawBits(x, y, BMP_TOPCLOUD, 4, grey);
+                    drawBits(x, y + 5, BMP_DROPS, 2, dma_display->color565(60, 130, 255)); break;
+    case WX_SNOW:   drawBits(x, y, BMP_TOPCLOUD, 4, grey);
+                    drawBits(x, y + 5, BMP_FLAKES, 2, dma_display->color565(230, 230, 255)); break;
+    case WX_STORM:  drawBits(x, y, BMP_TOPCLOUD, 4, grey);
+                    drawBits(x, y + 4, BMP_BOLT, 3, yellow); break;
+    default:        drawBits(x, y, BMP_CLOUD, 7, grey); break;
+  }
+}
+
+static void drawUmbrella(int x, int y) {
+  drawBits(x, y, BMP_CANOPY, 3, dma_display->color565(80, 170, 255));
+  drawBits(x, y + 3, BMP_HANDLE, 4, dma_display->color565(180, 180, 180));
+}
+
+static int glyphAdvance(char c) {
+  if (c >= 1 && c <= CH_UMBRELLA) return 8;   // icons: 7 px + 1 px gap
+  if (c == CH_DEGREE) return 4;
+  if (c == CH_GAP)    return 3;
+  return 6;
+}
+
+int runWidth(const char* text) {
+  int w = 0;
+  for (const char* p = text; *p; p++) w += glyphAdvance(*p);
+  return w;
+}
+
+// Draws text with icons at (x, y), skipping anything off-panel.
+// Returns the x just past the end.
+int drawRun(const char* text, int x, int y, uint16_t color) {
+  dma_display->setTextColor(color);
+  for (const char* p = text; *p; p++) {
+    char c = *p;
+    int adv = glyphAdvance(c);
+    if (x > -adv && x < PANEL_RES_X) {
+      if (c >= WX_SUN && c <= WX_STORM) drawWxIcon(x, y, c);
+      else if (c == CH_UMBRELLA)        drawUmbrella(x, y);
+      else if (c == CH_DEGREE)          dma_display->drawRect(x, y, 3, 3, color);
+      else if (c == CH_GAP)             { /* spacer */ }
+      else { dma_display->setCursor(x, y); dma_display->write(c); }
+    }
+    x += adv;
+  }
+  return x;
+}
+
+// e.g. [cloud]52° [umbrella]
+void buildWeatherText(const PanelState& s) {
+  wx_part[0] = '\0';
+  if (!s.wx_show) return;
+  int n = 0;
+  if (s.wx_icon >= WX_SUN && s.wx_icon <= WX_STORM) wx_part[n++] = (char)s.wx_icon;
+  n += snprintf(wx_part + n, sizeof(wx_part) - n, "%d%c", s.wx_temp, CH_DEGREE);
+  if (s.wx_umbrella && n + 3 < (int)sizeof(wx_part)) {
+    wx_part[n++] = CH_GAP;
+    wx_part[n++] = CH_UMBRELLA;
+    wx_part[n] = '\0';
+  }
 }
 
 // Cycles every 4 s: green 2x2 dots -> yellow 2x2 dots -> dim full white.
