@@ -149,7 +149,13 @@ protects against crashes, not against firmware that runs but misbehaves.
   shows it beside the bullet, or at the front of the scrolling text; minimalist
   mode shows it centred under the time. Data from Open-Meteo (free, no key),
   refreshed every 15 min; if it can't be reached the panel just hides it.
-- **Demo:** the server rotates a random line/station every 45 s — runs on the
+- **Two Trains** (**Display Options → Two Trains**): two rows, each a bullet
+  and a big arrival time, right-aligned so the colons line up. A yellow/red dot
+  after a time means delays/suspension on that line. Pick the second train with
+  the **Train 1 / Train 2** tabs that appear above section 01 (sections 01–03
+  and 05 edit whichever tab is selected). Scroll text, weather and minimalist
+  mode are paused while it's on.
+- **Demo** (**⚙ Settings → Demo Mode**): the server rotates a random line/station every 45 s — runs on the
   Pi, so it keeps going with the phone closed.
 - Train time shows `--:--` if the panel hasn't heard from the server for 3 minutes.
 

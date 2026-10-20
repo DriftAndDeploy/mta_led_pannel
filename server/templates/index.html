@@ -768,6 +768,52 @@
   }
   .toggle-row + .toggle-row { margin-top: 12px; }
 
+  /* Two-train tabs (sticky, so you always see which train you're editing) */
+  .train-tabs {
+    display: none;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    gap: 8px;
+    padding: 12px 20px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .train-tabs.show { display: flex; }
+  .train-tab {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  .train-tab.selected { border-color: #8ecbff; color: var(--text); box-shadow: inset 0 0 0 1px #8ecbff; }
+  .tab-bullet {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 15px;
+    background: #333;
+    color: #fff;
+  }
+  .tab-text { min-width: 0; display: flex; flex-direction: column; }
+  .tab-num  { font-family: 'Bebas Neue', sans-serif; font-size: 14px; letter-spacing: 2px; }
+  .tab-sub  { font-size: 10px; letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .train-tag { color: #8ecbff; opacity: .75; }
+
   /* Panel WiFi */
   .wifi-now {
     font-size: 12px;
@@ -866,15 +912,27 @@
   <div class="demo-banner" id="demo-banner">DEMO MODE — panel is cycling lines on its own</div>
 </header>
 
+<!-- Two-train tabs: sections 01-03 and 05 edit the selected train -->
+<div class="train-tabs" id="train-tabs">
+  <button class="train-tab selected" id="train-tab-0" onclick="switchTrain(0)">
+    <span class="tab-bullet" id="tab-bullet-0">–</span>
+    <span class="tab-text"><span class="tab-num">TRAIN 1</span><span class="tab-sub" id="tab-sub-0">—</span></span>
+  </button>
+  <button class="train-tab" id="train-tab-1" onclick="switchTrain(1)">
+    <span class="tab-bullet" id="tab-bullet-1">–</span>
+    <span class="tab-text"><span class="tab-num">TRAIN 2</span><span class="tab-sub" id="tab-sub-1">—</span></span>
+  </button>
+</div>
+
 <!-- Line picker -->
 <div class="section">
-  <div class="section-label">01 — Select Line</div>
+  <div class="section-label">01 — Select Line <span class="train-tag"></span></div>
   <div class="line-grid" id="line-grid"></div>
 </div>
 
 <!-- Station picker -->
 <div class="section">
-  <div class="section-label">02 — Select Station</div>
+  <div class="section-label">02 — Select Station <span class="train-tag"></span></div>
   <input class="station-search" id="station-search" placeholder="Search stations..." type="text"
          autocomplete="off" oninput="renderStations()">
   <div class="station-list" id="station-list">
@@ -884,7 +942,7 @@
 
 <!-- Platform -->
 <div class="section">
-  <div class="section-label">03 — Platform</div>
+  <div class="section-label">03 — Platform <span class="train-tag"></span></div>
   <div class="platform-toggle">
     <button class="platform-opt selected" id="platform-N" onclick="selectPlatform('N')">
       <span class="opt-label">↑ N</span>
@@ -900,6 +958,16 @@
 <!-- Display options -->
 <div class="section">
   <div class="section-label">04 — Display Options</div>
+  <div class="toggle-row">
+    <div>
+      <span class="toggle-label">Two Trains</span>
+      <div class="toggle-hint">Two rows on the panel: bullet + time for each · pick train 2 with the tabs up top</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-dual" onchange="onDualToggle(this.checked)">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
   <div class="toggle-row">
     <span class="toggle-label">Show Leave By time</span>
     <label class="toggle-switch">
@@ -934,21 +1002,15 @@
       <span class="toggle-track"><span class="toggle-thumb"></span></span>
     </label>
   </div>
-  <div class="toggle-row">
-    <div>
-      <span class="toggle-label">Demo Mode</span>
-      <div class="toggle-hint">Panel cycles random lines every 45 s · saves instantly</div>
-    </div>
-    <label class="toggle-switch">
-      <input type="checkbox" id="toggle-demo" onchange="saveDemo(this.checked)">
-      <span class="toggle-track"><span class="toggle-thumb"></span></span>
-    </label>
+  <div class="dual-note toggle-hint" id="dual-note" style="display:none; margin-top:12px">
+    Two Trains is on: the panel shows both times, so leave-by, alerts, weather and
+    minimalist mode are paused. Service problems show as a dot next to the train.
   </div>
 </div>
 
 <!-- Walk time -->
 <div class="section">
-  <div class="section-label">05 — Walk Time to Station</div>
+  <div class="section-label">05 — Walk Time to Station <span class="train-tag"></span></div>
   <div class="walk-row">
     <div class="walk-stepper">
       <button class="step-btn" onclick="adjustWalk(-1)" aria-label="Less">−</button>
@@ -1016,6 +1078,16 @@
           <div class="toggle-hint">60 s: 2×2 dots in each corner + centre, then full white · spots dead LEDs</div>
         </div>
         <button class="settings-link-btn" id="test-btn" onclick="runTestPattern()">RUN</button>
+      </div>
+      <div class="settings-row">
+        <div>
+          <span class="toggle-label">Demo Mode</span>
+          <div class="toggle-hint">Panel cycles random lines every 45 s · saves instantly</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-demo" onchange="saveDemo(this.checked)">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
       </div>
     </div>
 
@@ -1089,6 +1161,10 @@ let panelOff         = false;
 let statusTimer      = null;
 let latchBlanking    = 4;
 let latchTimer       = null;
+let dualOn           = false;
+let activeTrain      = 0;          // which train sections 01-03 / 05 are editing
+let trains           = [null, null];   // {line, station, platform, walk}
+let stationsReq      = 0;
 
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
@@ -1313,10 +1389,19 @@ async function init() {
     return;
   }
 
-  selectedLine     = cfg.line;
-  selectedStation  = { id: cfg.stop_parent, name: cfg.stop_name };
-  selectedPlatform = cfg.platform || 'N';
-  walkMinutes      = cfg.walk_minutes ?? 10;
+  trains = [
+    { line: cfg.line, station: { id: cfg.stop_parent, name: cfg.stop_name },
+      platform: cfg.platform || 'N', walk: cfg.walk_minutes ?? 10 },
+    { line: cfg.line2 || cfg.line,
+      station: cfg.stop_parent2 ? { id: cfg.stop_parent2, name: cfg.stop_name2 } : null,
+      platform: cfg.platform2 || 'S', walk: cfg.walk_minutes2 ?? 10 },
+  ];
+  activeTrain      = 0;
+  dualOn           = !!cfg.dual;
+  selectedLine     = trains[0].line;
+  selectedStation  = trains[0].station;
+  selectedPlatform = trains[0].platform;
+  walkMinutes      = trains[0].walk;
   panelOff         = cfg.panel_off === true;
 
   document.getElementById('walk-val').textContent = walkMinutes;
@@ -1327,6 +1412,7 @@ async function init() {
   document.getElementById('toggle-minimalist').checked = !!cfg.minimalist;
   document.getElementById('toggle-demo').checked       = !!cfg.demo;
   document.getElementById('toggle-weather').checked    = !!cfg.show_weather;
+  document.getElementById('toggle-dual').checked       = dualOn;
   refreshWeatherHint();
   document.getElementById('demo-banner').classList.toggle('show', !!cfg.demo);
   updateMinimalistUI();
@@ -1336,6 +1422,7 @@ async function init() {
 
   buildLineGrid();
   updatePlatformUI();
+  updateDualUI();
   updatePreview();
   loadStations(selectedLine, cfg.stop_parent);
 
@@ -1393,12 +1480,15 @@ async function loadStations(line, preselectId) {
   const list = document.getElementById('station-list');
   list.innerHTML = '<div class="loading-row"><span class="spinner"></span> Loading stations...</div>';
   document.getElementById('station-search').value = '';
+  const req = ++stationsReq;
+  let stations;
   try {
-    allStations = await api(`/api/stations?line=${encodeURIComponent(line)}`);
+    stations = await api(`/api/stations?line=${encodeURIComponent(line)}`);
   } catch (e) {
-    allStations = [];
+    stations = [];
   }
-  if (line !== selectedLine) return;          // user picked another line meanwhile
+  if (req !== stationsReq) return;   // user picked another line/train meanwhile
+  allStations = stations;
   if (preselectId) {
     selectedStation = allStations.find(s => s.id === preselectId) || selectedStation;
   }
@@ -1430,7 +1520,7 @@ function renderStations() {
 }
 
 // ── Platform ──────────────────────────────────────────────────────────────
-function selectPlatform(p) { selectedPlatform = p; updatePlatformUI(); }
+function selectPlatform(p) { selectedPlatform = p; updatePlatformUI(); updatePreview(); }
 
 function updatePlatformUI() {
   const [n, s] = DIRECTIONS[selectedLine] || ['Direction 1', 'Direction 2'];
@@ -1441,10 +1531,72 @@ function updatePlatformUI() {
 }
 
 // ── Options ───────────────────────────────────────────────────────────────
+// Dim the options the panel isn't showing right now.
 function updateMinimalistUI() {
-  const on = document.getElementById('toggle-minimalist').checked;
-  ['toggle-leave-by', 'toggle-alerts'].forEach(id =>
-    document.getElementById(id).closest('.toggle-row').style.opacity = on ? '0.35' : '1');
+  const minimal = document.getElementById('toggle-minimalist').checked;
+  const dim = (id, off) =>
+    document.getElementById(id).closest('.toggle-row').style.opacity = off ? '0.35' : '1';
+  dim('toggle-leave-by', dualOn || minimal);
+  dim('toggle-alerts', dualOn || minimal);
+  dim('toggle-minimalist', dualOn);
+  dim('toggle-weather', dualOn);
+  document.getElementById('dual-note').style.display = dualOn ? 'block' : 'none';
+}
+
+// ── Two trains ────────────────────────────────────────────────────────────
+function currentTrain() {
+  return { line: selectedLine, station: selectedStation, platform: selectedPlatform, walk: walkMinutes };
+}
+
+function trainAt(i) { return i === activeTrain ? currentTrain() : trains[i]; }
+
+function switchTrain(i) {
+  if (i === activeTrain) return;
+  trains[activeTrain] = currentTrain();
+  activeTrain = i;
+  ({ line: selectedLine, station: selectedStation, platform: selectedPlatform, walk: walkMinutes } = trains[i]);
+  document.getElementById('walk-val').textContent = walkMinutes;
+  buildLineGrid();
+  updatePlatformUI();
+  updateDualUI();
+  updatePreview();
+  loadStations(selectedLine, selectedStation?.id);
+}
+
+function onDualToggle(on) {
+  dualOn = on;
+  if (on) {
+    switchTrain(1);
+    document.getElementById('train-tabs').scrollIntoView({ behavior: 'smooth' });
+    showToast('Pick train 2, then Save to Panel');
+  } else {
+    switchTrain(0);
+  }
+  updateDualUI();
+  updatePreview();
+}
+
+function updateDualUI() {
+  document.getElementById('train-tabs').classList.toggle('show', dualOn);
+  document.querySelectorAll('.train-tag').forEach(t =>
+    t.textContent = dualOn ? `· TRAIN ${activeTrain + 1}` : '');
+  [0, 1].forEach(i =>
+    document.getElementById(`train-tab-${i}`).classList.toggle('selected', i === activeTrain));
+  updateTrainTabs();
+  updateMinimalistUI();
+}
+
+function updateTrainTabs() {
+  [0, 1].forEach(i => {
+    const t = trainAt(i);
+    const bullet = document.getElementById(`tab-bullet-${i}`);
+    bullet.textContent = t?.line || '–';
+    bullet.style.background = LINE_COLORS[t?.line] || '#333';
+    bullet.style.color = ['N', 'Q', 'R', 'W'].includes(t?.line) ? '#000' : '#fff';
+    const dir = t?.line ? (DIRECTIONS[t.line] || [])[t.platform === 'S' ? 1 : 0] : '';
+    document.getElementById(`tab-sub-${i}`).textContent =
+      t?.station ? `${t.station.name} · ${dir}` : 'Pick a station';
+  });
 }
 
 const WEATHER_HINT = 'Temperature + icon · ☂ when rain is likely · saves instantly';
@@ -1550,13 +1702,23 @@ function setTimeColor(hex) {
 
 // ── Save ──────────────────────────────────────────────────────────────────
 function updatePreview() {
+  const label = t => t?.line && t?.station ? `${t.line} · ${t.station.name}` : (t?.line || '—');
   document.getElementById('current-preview').textContent =
-    selectedLine && selectedStation ? `${selectedLine} · ${selectedStation.name}` : (selectedLine || '—');
+    dualOn ? `${label(trainAt(0))}  +  ${label(trainAt(1))}` : label(trainAt(0));
+  updateTrainTabs();
 }
 
 async function saveConfig() {
-  if (!selectedLine || !selectedStation) {
+  trains[activeTrain] = currentTrain();
+  const [t1, t2] = trains;
+  if (!t1.line || !t1.station) {
+    if (dualOn) switchTrain(0);
     showToast('Select a line and station first');
+    return;
+  }
+  if (dualOn && (!t2?.line || !t2?.station)) {
+    switchTrain(1);
+    showToast('Pick a station for train 2');
     return;
   }
   const btn = document.getElementById('save-btn');
@@ -1564,17 +1726,23 @@ async function saveConfig() {
   btn.textContent = 'SAVING...';
 
   const { r, g, b } = hexToRgb(document.getElementById('time-color').value);
-  const ok = await patchConfig({
-    line:          selectedLine,
-    stop_parent:   selectedStation.id,
-    stop_name:     selectedStation.name,
-    platform:      selectedPlatform,
-    walk_minutes:  walkMinutes,
+  const update = {
+    line:          t1.line,
+    stop_parent:   t1.station.id,
+    stop_name:     t1.station.name,
+    platform:      t1.platform,
+    walk_minutes:  t1.walk,
+    dual:          dualOn,
     show_leave_by: document.getElementById('toggle-leave-by').checked,
     show_alerts:   document.getElementById('toggle-alerts').checked,
     minimalist:    document.getElementById('toggle-minimalist').checked,
     time_r: r, time_g: g, time_b: b,
-  }, '✓ Panel updates within 15 seconds');
+  };
+  if (t2?.line && t2?.station) {
+    Object.assign(update, { line2: t2.line, stop_parent2: t2.station.id, stop_name2: t2.station.name,
+                            platform2: t2.platform, walk_minutes2: t2.walk });
+  }
+  const ok = await patchConfig(update, '✓ Panel updates within 15 seconds');
 
   btn.disabled = false;
   btn.textContent = 'SAVE TO PANEL';

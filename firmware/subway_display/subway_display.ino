@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.5.0"
-#define FW_BUILD   650
+#define FW_VERSION "6.6.0"
+#define FW_BUILD   660
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -86,6 +86,12 @@ struct PanelState {
   int16_t  wx_temp        = 0;      // degrees F
   uint8_t  wx_icon        = 0;      // WX_* below (0 = none)
   bool     wx_umbrella    = false;  // rain likely in the next 12 h
+  // Two-train mode: second row
+  bool     dual           = false;
+  char     train_time2[8] = "--:--";
+  char     line2[4]       = "L";
+  uint8_t  logo2_r = 167, logo2_g = 169, logo2_b = 172;
+  uint8_t  service_status2 = 0;
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
   bool     panel_off      = false;
@@ -145,6 +151,8 @@ void render(const PanelState& s);
 void drawNormal(const PanelState& s);
 void drawMinimalist(const PanelState& s);
 void drawLogoAt(int cx, int cy, const PanelState& s);
+void drawBullet(int cx, int cy, int r, const char* l, uint8_t cr, uint8_t cg, uint8_t cb);
+void drawDual(const PanelState& s);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -577,6 +585,13 @@ bool fetchTrainTimes() {
   n.wx_temp        = doc["wx_temp"] | 0;
   n.wx_icon        = doc["wx_icon"] | 0;
   n.wx_umbrella    = (doc["wx_umbrella"] | 0) != 0;
+  n.dual           = (doc["dual"] | 0) != 0;
+  copyStr(n.train_time2, sizeof(n.train_time2), doc["train_time2"] | "--:--");
+  copyStr(n.line2,       sizeof(n.line2),       doc["line2"]       | "L");
+  n.logo2_r        = doc["logo2_r"] | 167;
+  n.logo2_g        = doc["logo2_g"] | 169;
+  n.logo2_b        = doc["logo2_b"] | 172;
+  n.service_status2 = doc["service_status2"] | 0;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
   n.panel_off      = (doc["panel_off"]  | 0) != 0;
@@ -664,6 +679,7 @@ void render(const PanelState& in) {
   // Stale data: never show a time we can no longer vouch for.
   if (millis() - s.updated_ms > STALE_MS) {
     copyStr(s.train_time, sizeof(s.train_time), "--:--");
+    copyStr(s.train_time2, sizeof(s.train_time2), "--:--");
     s.leave_by[0] = '\0';
     s.wx_show = false;
   }
@@ -715,8 +731,9 @@ void render(const PanelState& in) {
   }
 
   dma_display->clearScreen();
-  if (s.minimalist) drawMinimalist(s);
-  else              drawNormal(s);
+  if (s.dual)            drawDual(s);
+  else if (s.minimalist) drawMinimalist(s);
+  else                   drawNormal(s);
   present();
 }
 
@@ -782,7 +799,10 @@ void drawMinimalist(const PanelState& s) {
 // Subway bullet. Dimming keeps bright colours from blooming on the panel;
 // N/Q/R/W use unlit (black) letters like the real yellow bullets.
 void drawLogoAt(int cx, int cy, const PanelState& s) {
-  const char* l = s.line;
+  drawBullet(cx, cy, 7, s.line, s.logo_r, s.logo_g, s.logo_b);
+}
+
+void drawBullet(int cx, int cy, int r, const char* l, uint8_t cr, uint8_t cg, uint8_t cb) {
   float dim = 0.90f;
   if      (!strcmp(l,"L"))                                            dim = 0.50f;
   else if (!strcmp(l,"1") || !strcmp(l,"2") || !strcmp(l,"3"))       dim = 0.80f;
@@ -791,12 +811,57 @@ void drawLogoAt(int cx, int cy, const PanelState& s) {
 
   bool darkLetter = !strcmp(l,"N") || !strcmp(l,"Q") || !strcmp(l,"R") || !strcmp(l,"W");
 
-  dma_display->fillCircle(cx, cy, 7, dma_display->color565(
-      (uint8_t)(s.logo_r * dim), (uint8_t)(s.logo_g * dim), (uint8_t)(s.logo_b * dim)));
+  dma_display->fillCircle(cx, cy, r, dma_display->color565(
+      (uint8_t)(cr * dim), (uint8_t)(cg * dim), (uint8_t)(cb * dim)));
   dma_display->setTextSize(1);
   dma_display->setTextColor(darkLetter ? 0 : dma_display->color565(255, 255, 255));
   dma_display->setCursor(cx - (int)(strlen(l) * 6) / 2 + 1, cy - 3);
   dma_display->print(l);
+}
+
+// Two-train layout: one row per train, [bullet][big time][alert dot].
+//   Row 1: y 1-14, row 2: y 17-30. Times use the 2x font with 1 px letter
+//   spacing and a slim colon, so "12:45" (46 px) fits beside a 13 px bullet.
+//   Times are right-aligned to x=59 so the colons line up like a departure
+//   board, and the alert dots sit in a fixed column at x 61-62.
+static int bigTimeWidth(const char* t) {
+  int w = 0;
+  for (const char* p = t; *p; p++) w += (*p == ':') ? 3 : 11;
+  return w - 1;
+}
+
+static int drawBigTime(int x, int y, const char* t, uint16_t c) {
+  dma_display->setTextSize(2);
+  dma_display->setTextColor(c);
+  for (const char* p = t; *p; p++) {
+    if (*p == ':') {
+      dma_display->fillRect(x, y + 3, 2, 2, c);
+      dma_display->fillRect(x, y + 9, 2, 2, c);
+      x += 3;
+    } else {
+      dma_display->setCursor(x, y);
+      dma_display->write(*p);
+      x += 11;
+    }
+  }
+  dma_display->setTextSize(1);
+  return x - 1;   // first column after the last glyph
+}
+
+static void drawTrainRow(int y, const char* line, uint8_t r, uint8_t g, uint8_t b,
+                         const char* t, uint8_t status, uint16_t timeColor) {
+  drawBullet(6, y + 7, 6, line, r, g, b);
+  drawBigTime(max(14, 60 - bigTimeWidth(t)), y, t, timeColor);
+  if (status) {   // yellow = delays/changes, red = suspended
+    uint16_t c = status == 2 ? dma_display->color565(220, 40, 40) : dma_display->color565(255, 200, 0);
+    dma_display->fillRect(61, y + 6, 2, 2, c);
+  }
+}
+
+void drawDual(const PanelState& s) {
+  uint16_t tc = dma_display->color565(s.time_r, s.time_g, s.time_b);
+  drawTrainRow(1,  s.line,  s.logo_r,  s.logo_g,  s.logo_b,  s.train_time,  s.service_status,  tc);
+  drawTrainRow(17, s.line2, s.logo2_r, s.logo2_g, s.logo2_b, s.train_time2, s.service_status2, tc);
 }
 
 void drawStatusDot(uint8_t status) {

@@ -280,6 +280,36 @@ class Weather(unittest.TestCase):
         self.assertEqual(get.call_count, 1)   # no retry for WEATHER_RETRY_S
 
 
+class TwoTrains(unittest.TestCase):
+    def test_second_row_in_payload(self):
+        c = ps.app.test_client()
+        feeds = {"L": fake_feed("L14S", [at(10, 31)]), "G": fake_feed("G29N", [at(10, 44)], "G")}
+        levels = {"L": ("", 0), "G": ("G trains delayed", 1)}
+        with mock.patch.object(ps, "get_feed", side_effect=lambda line: feeds[line]), \
+             mock.patch.object(ps, "alert_for_line", side_effect=lambda line, ts: levels.get(line, ("", 0))), \
+             mock.patch.object(ps, "datetime") as dt:
+            dt.now.return_value = at(10, 10)
+            self.assertEqual(c.get("/next-trains?panel_id=TT0001").get_json()["dual"], 0)
+            r = c.post("/api/config?panel_id=TT0001", json={
+                "platform": "S", "dual": True, "line2": "G", "stop_parent2": "G29",
+                "stop_name2": "Metropolitan Av", "platform2": "N", "walk_minutes2": 4})
+            self.assertEqual(r.status_code, 200)
+            j = c.get("/next-trains?panel_id=TT0001").get_json()
+            c.post("/api/config?panel_id=TT0001", json={"demo": True})
+            demo = c.get("/next-trains?panel_id=TT0001").get_json()
+        self.assertEqual((j["dual"], j["train_time"], j["train_time2"], j["line2"]),
+                         (1, "10:31", "10:44", "G"))
+        self.assertEqual((j["logo2_r"], j["logo2_g"], j["logo2_b"]), (108, 190, 69))
+        self.assertEqual((j["service_status"], j["service_status2"]), (0, 1))
+        self.assertEqual(demo["dual"], 0)   # demo shows one train
+
+    def test_second_train_validation(self):
+        c = ps.app.test_client()
+        r = c.post("/api/config?panel_id=TT0002", json={"line2": "X", "platform2": "E"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(len(r.get_json()["errors"]), 2)
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

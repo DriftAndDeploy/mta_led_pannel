@@ -116,6 +116,13 @@ DEFAULT_CONFIG = {
     "auto_update":   True,
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
     "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
+    # Two-train mode: a second line/station shown as a second row.
+    "dual":          False,
+    "line2":         "L",
+    "stop_parent2":  "L14",
+    "stop_name2":    "Morgan Av",
+    "platform2":     "S",
+    "walk_minutes2": 10,
 }
 
 
@@ -251,6 +258,12 @@ CONFIG_SCHEMA = {
     "auto_update":   _bool,
     "latch_blanking": _int_range(1, 8),
     "show_weather":  _bool,
+    "dual":          _bool,
+    "line2":         _choice(set(LINES)),
+    "stop_parent2":  _text(8, r"[A-Z0-9]{1,8}"),
+    "stop_name2":    _text(60),
+    "platform2":     _choice({"N", "S"}),
+    "walk_minutes2": _int_range(0, 90),
 }
 
 
@@ -599,6 +612,23 @@ def demo_selection(panel_id: str, slot: int) -> tuple[str, dict | None, str]:
     return lines[0], None, "N"
 
 
+def fmt_time(dt: datetime) -> str:
+    return dt.strftime("%I:%M").lstrip("0")
+
+
+def train_times(panel_id: str, line: str, stop_parent: str, platform: str,
+                walk: int, now: datetime) -> tuple[str, str, str | None]:
+    """(train time, leave-by time, error) for one line/station/platform."""
+    try:
+        dt = next_departure(get_feed(line), stop_parent + platform, line, walk, now)
+    except Exception:
+        log.exception("Train feed error (panel %s, line %s)", panel_id, line)
+        return "--:--", "", "feed"
+    if not dt:
+        return "--:--", "", None
+    return fmt_time(dt), fmt_time(dt - timedelta(minutes=walk)), None
+
+
 @app.get("/next-trains")
 def next_trains():
     panel_id = clean_panel_id(request.args.get("panel_id")) or "DEFAULT"
@@ -614,16 +644,8 @@ def next_trains():
         stop_parent = station["id"] if station else stop_parent
 
     now = datetime.now(tz=EASTERN)
-    walk = cfg["walk_minutes"]
-    train_time, leave_by, error = "--:--", "", None
-    try:
-        dt = next_departure(get_feed(line), stop_parent + platform, line, walk, now)
-        if dt:
-            train_time = dt.strftime("%I:%M").lstrip("0")
-            leave_by = (dt - timedelta(minutes=walk)).strftime("%I:%M").lstrip("0")
-    except Exception:
-        log.exception("Train feed error (panel %s, line %s)", panel_id, line)
-        error = "feed"
+    train_time, leave_by, error = train_times(panel_id, line, stop_parent, platform,
+                                              cfg["walk_minutes"], now)
 
     alert_text, level = alert_for_line(line, now.timestamp())
     r, g, b = hex_to_rgb(LINE_COLORS.get(line, "#888888"))
@@ -657,6 +679,21 @@ def next_trains():
         # seconds of diagnostic test pattern left (0 = normal display)
         "test_pattern":   max(0, int(cfg.get("test_until", 0) - time.time())),
     }
+    # Two-train mode (demo always shows a single train).
+    payload["dual"] = 0
+    if cfg["dual"] and not cfg["demo"]:
+        line2 = cfg["line2"]
+        time2, _, error2 = train_times(panel_id, line2, cfg["stop_parent2"], cfg["platform2"],
+                                       cfg["walk_minutes2"], now)
+        r2, g2, b2 = hex_to_rgb(LINE_COLORS.get(line2, "#888888"))
+        payload.update({
+            "dual":            1,
+            "train_time2":     time2,
+            "line2":           line2,
+            "logo2_r": r2, "logo2_g": g2, "logo2_b": b2,
+            "service_status2": alert_for_line(line2, now.timestamp())[1],
+        })
+        payload["error"] = payload["error"] or error2
     if wifi_new:
         payload["wifi_new"] = wifi_new
     return jsonify(payload)
