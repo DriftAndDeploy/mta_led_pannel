@@ -836,6 +836,7 @@
     margin-top: 10px;
   }
   .night-times.show { display: flex; }
+  .night-times + .toggle-row { margin-top: 12px; }
   .night-times label {
     flex: 1;
     display: flex;
@@ -1041,6 +1042,17 @@
     </label>
   </div>
   <div class="toggle-row">
+    <div>
+      <span class="toggle-label">Both Directions</span>
+      <div class="toggle-hint">Two rows for this line &amp; station: ↑ <span id="dir-n">uptown</span> on top,
+        ↓ <span id="dir-s">downtown</span> below · saves instantly</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-both" onchange="onBothDirs(this.checked)">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="toggle-row">
     <span class="toggle-label">Show Leave By time</span>
     <label class="toggle-switch">
       <input type="checkbox" id="toggle-leave-by" checked>
@@ -1102,8 +1114,8 @@
     </label>
   </div>
   <div class="dual-note toggle-hint" id="dual-note" style="display:none; margin-top:12px">
-    Two Trains is on: the panel shows both times, so leave-by, alerts, weather and
-    minimalist mode are paused. Service problems show as a dot next to the train.
+    <span id="dual-note-mode">Two Trains</span> is on: the panel shows two times, so leave-by,
+    alerts, weather and minimalist mode are paused. Service problems show as a dot next to the time.
   </div>
 </div>
 
@@ -1274,6 +1286,7 @@ let statusTimer      = null;
 let latchBlanking    = 4;
 let latchTimer       = null;
 let dualOn           = false;
+let bothOn           = false;   // both directions of one line
 let activeTrain      = 0;          // which train sections 01-03 / 05 are editing
 let trains           = [null, null];   // {line, station, platform, walk}
 let stationsReq      = 0;
@@ -1582,7 +1595,8 @@ async function init() {
       platform: cfg.platform2 || 'S', walk: cfg.walk_minutes2 ?? 10 },
   ];
   activeTrain      = 0;
-  dualOn           = !!cfg.dual;
+  dualOn           = !!cfg.dual && !cfg.both_dirs;
+  bothOn           = !!cfg.both_dirs;
   selectedLine     = trains[0].line;
   selectedStation  = trains[0].station;
   selectedPlatform = trains[0].platform;
@@ -1598,6 +1612,7 @@ async function init() {
   document.getElementById('toggle-demo').checked       = !!cfg.demo;
   document.getElementById('toggle-weather').checked    = !!cfg.show_weather;
   document.getElementById('toggle-dual').checked       = dualOn;
+  document.getElementById('toggle-both').checked       = bothOn;
   document.getElementById('toggle-animations').checked = !!cfg.animations;
   document.getElementById('toggle-night').checked      = !!cfg.night_mode;
   document.getElementById('night-start').value         = cfg.night_start || '01:00';
@@ -1714,6 +1729,10 @@ function selectPlatform(p) { selectedPlatform = p; updatePlatformUI(); updatePre
 
 function updatePlatformUI() {
   const [n, s] = DIRECTIONS[selectedLine] || ['Direction 1', 'Direction 2'];
+  if (activeTrain === 0) {
+    document.getElementById('dir-n').textContent = n.toLowerCase();
+    document.getElementById('dir-s').textContent = s.toLowerCase();
+  }
   document.getElementById('label-N').textContent = n;
   document.getElementById('label-S').textContent = s;
   document.getElementById('platform-N').classList.toggle('selected', selectedPlatform === 'N');
@@ -1726,11 +1745,34 @@ function updateMinimalistUI() {
   const minimal = document.getElementById('toggle-minimalist').checked;
   const dim = (id, off) =>
     document.getElementById(id).closest('.toggle-row').style.opacity = off ? '0.35' : '1';
-  dim('toggle-leave-by', dualOn || minimal);
-  dim('toggle-alerts', dualOn || minimal);
-  dim('toggle-minimalist', dualOn);
-  dim('toggle-weather', dualOn);
-  document.getElementById('dual-note').style.display = dualOn ? 'block' : 'none';
+  const twoRows = dualOn || bothOn;
+  dim('toggle-leave-by', twoRows || minimal);
+  dim('toggle-alerts', twoRows || minimal);
+  dim('toggle-minimalist', twoRows);
+  dim('toggle-weather', twoRows);
+  document.getElementById('dual-note').style.display = twoRows ? 'block' : 'none';
+  document.getElementById('dual-note-mode').textContent = bothOn ? 'Both Directions' : 'Two Trains';
+  // Platform choice doesn't matter when both directions are shown.
+  document.querySelector('.platform-toggle').closest('.section').style.opacity = bothOn ? '0.35' : '1';
+}
+
+async function onBothDirs(on) {
+  const update = { both_dirs: on };
+  if (on && dualOn) {                 // one two-row mode at a time
+    document.getElementById('toggle-dual').checked = false;
+    onDualToggle(false);
+    update.dual = false;
+  }
+  bothOn = on;
+  updateMinimalistUI();
+  updatePreview();
+  const [n, s] = DIRECTIONS[trains[0]?.line || selectedLine] || ['N', 'S'];
+  if (!await patchConfig(update, on ? `Both directions on (↑ ${n})` : 'Both directions off')) {
+    bothOn = !on;
+    document.getElementById('toggle-both').checked = !on;
+    updateMinimalistUI();
+    updatePreview();
+  }
 }
 
 // ── Two trains ────────────────────────────────────────────────────────────
@@ -1755,6 +1797,11 @@ function switchTrain(i) {
 
 function onDualToggle(on) {
   dualOn = on;
+  if (on && bothOn) {                 // one two-row mode at a time
+    bothOn = false;
+    document.getElementById('toggle-both').checked = false;
+    patchConfig({ both_dirs: false });
+  }
   if (on) {
     switchTrain(1);
     document.getElementById('train-tabs').scrollIntoView({ behavior: 'smooth' });
@@ -2075,7 +2122,8 @@ function setTimeColor(hex) {
 function updatePreview() {
   const label = t => t?.line && t?.station ? `${t.line} · ${t.station.name}` : (t?.line || '—');
   document.getElementById('current-preview').textContent =
-    dualOn ? `${label(trainAt(0))}  +  ${label(trainAt(1))}` : label(trainAt(0));
+    dualOn ? `${label(trainAt(0))}  +  ${label(trainAt(1))}`
+           : label(trainAt(0)) + (bothOn ? ' · both ways' : '');
   updateTrainTabs();
 }
 

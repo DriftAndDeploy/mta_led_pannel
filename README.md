@@ -167,6 +167,10 @@ protects against crashes, not against firmware that runs but misbehaves.
   can cross midnight). Tapping the power button during that window turns it
   back on until the window ends; the schedule resumes the next night. The power
   button shows blue while the panel is asleep on schedule.
+- **Both Directions** (**Display Options → Both Directions**): the same two-row
+  layout for your line and station, ↑ uptown (N) on top and ↓ downtown (S)
+  below — a small arrow next to each bullet tells them apart. Turning it on
+  turns Two Trains off and vice versa.
 - **Two Trains** (**Display Options → Two Trains**): two rows, each a bullet
   and a big arrival time, right-aligned so the colons line up. A yellow/red dot
   after a time means delays/suspension on that line. Pick the second train with

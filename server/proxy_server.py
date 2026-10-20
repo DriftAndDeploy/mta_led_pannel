@@ -124,6 +124,8 @@ DEFAULT_CONFIG = {
     "night_mode":    False,  # panel off overnight
     "night_start":   "01:00",
     "night_end":     "06:00",
+    # Both directions: same line/station, uptown row + downtown row.
+    "both_dirs":     False,
     # Two-train mode: a second line/station shown as a second row.
     "dual":          False,
     "line2":         "L",
@@ -270,6 +272,7 @@ CONFIG_SCHEMA = {
     "night_mode":    _bool,
     "night_start":   _text(5, r"(?:[01]\d|2[0-3]):[0-5]\d"),
     "night_end":     _text(5, r"(?:[01]\d|2[0-3]):[0-5]\d"),
+    "both_dirs":     _bool,
     "dual":          _bool,
     "line2":         _choice(set(LINES)),
     "stop_parent2":  _text(8, r"[A-Z0-9]{1,8}"),
@@ -921,9 +924,12 @@ def next_trains():
 
     cfg = load_config(panel_id)
     line, stop_parent, platform = cfg["line"], cfg["stop_parent"], cfg["platform"]
+    both_dirs = cfg["both_dirs"] and not cfg["demo"]
     if cfg["demo"]:
         line, station, platform = demo_selection(panel_id, int(time.time() // DEMO_INTERVAL_S))
         stop_parent = station["id"] if station else stop_parent
+    if both_dirs:
+        platform = "N"          # row 1 = N (uptown etc.), row 2 = S
 
     now = datetime.now(tz=EASTERN)
     train_time, leave_by, error = train_times(panel_id, line, stop_parent, platform,
@@ -968,9 +974,23 @@ def next_trains():
     preview = cfg.get("preview_arrival") or {}
     if preview.get("until", 0) > time.time():
         payload["arriving"] = preview["id"]
-    # Two-train mode (demo always shows a single train).
+    # Two rows: both directions of one line, or two trains (never in demo).
     payload["dual"] = 0
-    if cfg["dual"] and not cfg["demo"]:
+    payload["dirs"] = 0          # 1 = rows are N/S of the same line: firmware adds arrows
+    if both_dirs:
+        time2, _, error2 = train_times(panel_id, line, stop_parent, "S", cfg["walk_minutes"], now)
+        payload.update({
+            "dual":            1,
+            "dirs":            1,
+            "train_time2":     time2,
+            "line2":           line,
+            "logo2_r": r, "logo2_g": g, "logo2_b": b,
+            "service_status2": level,
+            "arriving2":       arrival_id(panel_id, line, stop_parent + "S", now)
+                               if cfg["animations"] else 0,
+        })
+        payload["error"] = payload["error"] or error2
+    elif cfg["dual"] and not cfg["demo"]:
         line2 = cfg["line2"]
         time2, _, error2 = train_times(panel_id, line2, cfg["stop_parent2"], cfg["platform2"],
                                        cfg["walk_minutes2"], now)

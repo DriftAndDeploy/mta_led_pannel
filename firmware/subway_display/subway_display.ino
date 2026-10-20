@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.8.0"
-#define FW_BUILD   680
+#define FW_VERSION "6.9.0"
+#define FW_BUILD   690
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -89,8 +89,9 @@ struct PanelState {
   int16_t  wx_temp        = 0;      // degrees F
   uint8_t  wx_icon        = 0;      // WX_* below (0 = none)
   bool     wx_umbrella    = false;  // rain likely in the next 12 h
-  // Two-train mode: second row
+  // Two-row modes: second row
   bool     dual           = false;
+  bool     dirs           = false;  // rows are the same line, N then S: draw arrows
   char     train_time2[8] = "--:--";
   char     line2[4]       = "L";
   uint8_t  logo2_r = 167, logo2_g = 169, logo2_b = 172;
@@ -596,6 +597,7 @@ bool fetchTrainTimes() {
   n.wx_icon        = doc["wx_icon"] | 0;
   n.wx_umbrella    = (doc["wx_umbrella"] | 0) != 0;
   n.dual           = (doc["dual"] | 0) != 0;
+  n.dirs           = (doc["dirs"] | 0) != 0;
   copyStr(n.train_time2, sizeof(n.train_time2), doc["train_time2"] | "--:--");
   copyStr(n.line2,       sizeof(n.line2),       doc["line2"]       | "L");
   n.logo2_r        = doc["logo2_r"] | 167;
@@ -906,9 +908,29 @@ static int drawBigTime(int x, int y, const char* t, uint16_t c) {
   return x - 1;   // first column after the last glyph
 }
 
+// Direction arrow in the empty corner just outside the bullet: top-right
+// for the N row (points up), bottom-right for the S row (points down).
+// Any bullet pixel directly touching the arrow is cleared to keep a gap.
+static void drawDirArrow(int y, bool up) {
+  static const uint8_t ARROW[3] = {0x04, 0x0E, 0x1F};      // 5 px wide, bit 4 = left
+  for (int pass = 0; pass < 2; pass++)
+    for (int r = 0; r < 3; r++)
+      for (int b = 0; b < 5; b++) {
+        if (!(ARROW[r] & (0x10 >> b))) continue;
+        int x = 10 + b, yy = up ? y - 1 + r : y + 14 - r;
+        if (pass == 0) {
+          dma_display->drawPixel(x - 1, yy, 0); dma_display->drawPixel(x, yy - 1, 0);
+          dma_display->drawPixel(x, yy + 1, 0);
+        } else {
+          dma_display->drawPixel(x, yy, dma_display->color565(235, 235, 235));
+        }
+      }
+}
+
 static void drawTrainRow(int y, const char* line, uint8_t r, uint8_t g, uint8_t b,
-                         const char* t, uint8_t status, uint16_t timeColor) {
+                         const char* t, uint8_t status, uint16_t timeColor, int8_t arrow = 0) {
   drawBullet(6, y + 7, 6, line, r, g, b);
+  if (arrow) drawDirArrow(y, arrow > 0);
   drawBigTime(max(14, 60 - bigTimeWidth(t)), y, t, timeColor);
   if (status) {   // yellow = delays/changes, red = suspended
     uint16_t c = status == 2 ? dma_display->color565(220, 40, 40) : dma_display->color565(255, 200, 0);
@@ -918,8 +940,10 @@ static void drawTrainRow(int y, const char* line, uint8_t r, uint8_t g, uint8_t 
 
 void drawDual(const PanelState& s) {
   uint16_t tc = dma_display->color565(s.time_r, s.time_g, s.time_b);
-  drawTrainRow(1,  s.line,  s.logo_r,  s.logo_g,  s.logo_b,  s.train_time,  s.service_status,  tc);
-  drawTrainRow(17, s.line2, s.logo2_r, s.logo2_g, s.logo2_b, s.train_time2, s.service_status2, tc);
+  drawTrainRow(1,  s.line,  s.logo_r,  s.logo_g,  s.logo_b,  s.train_time,  s.service_status,  tc,
+               s.dirs ? 1 : 0);
+  drawTrainRow(17, s.line2, s.logo2_r, s.logo2_g, s.logo2_b, s.train_time2, s.service_status2, tc,
+               s.dirs ? -1 : 0);
 }
 
 // ---------------------------------------------------------------------------

@@ -472,6 +472,28 @@ class Occasions(unittest.TestCase):
         self.assertEqual(len(ps.preview_list(2026)), 13)   # every animation except the turtle
 
 
+class BothDirections(unittest.TestCase):
+    def test_rows_are_north_then_south(self):
+        c = ps.app.test_client()
+        trips = [SimpleNamespace(trip_id="n1", stop_time_updates=[SimpleNamespace(
+                     stop_id="L14N", departure=at(10, 31).replace(tzinfo=None), arrival=None)]),
+                 SimpleNamespace(trip_id="s1", stop_time_updates=[SimpleNamespace(
+                     stop_id="L14S", departure=at(10, 37).replace(tzinfo=None), arrival=None)])]
+        feed = SimpleNamespace(filter_trips=lambda line_id: trips)
+        with mock.patch.object(ps, "get_feed", return_value=feed), \
+             mock.patch.object(ps, "alert_for_line", return_value=("L delays", 1)), \
+             mock.patch.object(ps, "datetime") as dt:
+            dt.now.return_value = at(10, 10)
+            c.post("/api/config?panel_id=BD0001", json={"both_dirs": True, "platform": "S", "dual": True})
+            j = c.get("/next-trains?panel_id=BD0001").get_json()
+            c.post("/api/config?panel_id=BD0001", json={"both_dirs": False})
+            two = c.get("/next-trains?panel_id=BD0001").get_json()
+        self.assertEqual((j["dual"], j["dirs"]), (1, 1))
+        self.assertEqual((j["train_time"], j["train_time2"]), ("10:31", "10:37"))   # N first, even if platform=S
+        self.assertEqual((j["line"], j["line2"], j["service_status2"]), ("L", "L", 1))
+        self.assertEqual(two["dirs"], 0)                                             # back to two-train mode
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()
