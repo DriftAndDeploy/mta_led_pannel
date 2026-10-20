@@ -78,7 +78,7 @@ Repeat for each panel. After this, never plug in again unless a panel is dead.
 
 > The Panel ID is the last 6 hex digits of the chip's MAC — the same IDs
 > v5.22 used. If a panel shows a different ID than the web app remembers,
-> tap **PANEL ID** in the web app and enter the one on the screen.
+> open **⚙ Settings → Switch panel** in the web app and enter the one on the screen.
 
 ---
 
@@ -119,8 +119,8 @@ To update immediately instead of waiting, run `deploy/update.sh` on the Pi.
    ```
 
 Within 5 minutes the Pi has it, and ~15 s later each panel shows **UPDATING** with a progress bar, reboots, and
-comes back on the new build. The web app header shows the running build
-(`fw 600 → 601` while an update is pending, then `fw 601`).
+comes back on the new build. **⚙ Settings → Firmware** in the web app shows
+the running build (`Build 600 → 601 (updating)`, then `Build 601 · up to date`).
 
 **Safety nets**
 - The download is MD5-verified before the panel switches to it.
@@ -141,8 +141,8 @@ protects against crashes, not against firmware that runs but misbehaves.
 
 - **Normal:** next catchable train time (top), line bullet + scrolling
   "Leave by" (white) and service alert (yellow) along the bottom.
-- **Minimalist:** bullet + time centred, with a status dot (green normal,
-  yellow alerts/changes, red suspended).
+- **Minimalist:** bullet + time centred, with a 2×2 status dot in the top-left
+  corner (green normal, yellow alerts/changes, red suspended).
 - **Demo:** the server rotates a random line/station every 45 s — runs on the
   Pi, so it keeps going with the phone closed.
 - Train time shows `--:--` if the panel hasn't heard from the server for 3 minutes.
@@ -160,11 +160,11 @@ If that page won't load, plug the panel into your PC instead: Arduino IDE →
 **Before** you swap routers or change the password, while the panels are still
 online:
 
-1. Open the web app → **07 — Panel WiFi** → enter the new network name and
+1. Open the web app → **⚙ Settings → Panel WiFi** → enter the new network name and
    password → **Send to panel**.
 2. Within ~15 s it shows "✓ Panel saved …". The password is then deleted from
    the Pi; only the panel keeps it.
-3. Repeat for each panel (tap **PANEL ID** to switch panels).
+3. Repeat for each panel (**⚙ Settings → Switch panel**).
 4. Swap the router. About 30 s after the old network disappears, each panel
    scans and joins the new one by itself.
 
@@ -185,5 +185,5 @@ method above.
 | OTA never starts | `curl https://whenisthetraincoming.com/firmware/info` shows the new build? Panel was flashed with the Minimal SPIFFS scheme? |
 | "UPDATE FAIL" on panel | Serial monitor at 115200 prints the reason; usually a partition-scheme mismatch |
 | PanelSetup page won't load | Use the Serial Monitor method above (USB cable) |
-| Faint lines / glow next to lit pixels | Web app → **Ghosting Fix** → raise it (4 → 6 → 8) until it's gone |
+| Faint lines / glow next to lit pixels | **⚙ Settings → Ghosting Fix** → raise it (4 → 6 → 8) until it's gone |
 | Pushed but nothing changed | Wait 5 min, then on the Pi: `journalctl -u mta-autoupdate -n 30 --no-pager` |

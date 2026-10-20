@@ -110,22 +110,26 @@
   }
 
   .section-label {
-    font-size: 10px;
+    font-size: 12.5px;
     letter-spacing: 2px;
-    color: var(--muted);
+    color: #8ecbff;
     text-transform: uppercase;
     margin-bottom: 14px;
   }
 
-  /* Line grid */
+  /* Line grid — one cluster per trunk colour; clusters wrap as a unit */
   .line-grid {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 12px;
   }
+  .line-group { display: flex; gap: 7px; }
 
   .line-btn {
-    aspect-ratio: 1;
+    width: 42px;
+    height: 42px;
+    flex-shrink: 0;
+    padding: 0;
     border-radius: 50%;
     border: 3px solid transparent;
     background: #222;
@@ -515,7 +519,69 @@
   .save-btn:active { transform: scale(.98); opacity: .85; }
   .save-btn:disabled { opacity: .3; }
 
-  /* Panel ID button */
+  /* Settings (cog) button */
+  .settings-btn {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 2px solid #444;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: auto;
+    touch-action: manipulation;
+    transition: border-color .15s, background .15s;
+  }
+  .settings-btn:active { background: #222; border-color: #777; }
+
+  /* Settings sheet */
+  .settings-sheet {
+    max-height: 88vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .settings-group {
+    padding: 18px 0;
+    border-top: 1px solid var(--border);
+  }
+  .settings-group:first-of-type { border-top: none; padding-top: 8px; }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .settings-row + .settings-row { margin-top: 12px; }
+  .settings-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 24px;
+    letter-spacing: 4px;
+    color: var(--text);
+  }
+  .settings-sub {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: .5px;
+    margin-top: 2px;
+  }
+  .settings-link-btn {
+    background: none;
+    border: 1px solid #555;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .settings-link-btn:active { background: #222; }
+
+  /* Panel ID button (legacy, unused) */
   .panel-id-btn {
     background: none;
     border: 1px solid #555;
@@ -783,11 +849,11 @@
       <span class="brightness-val" id="brightness-val">80%</span>
     </div>
 
-    <button class="panel-id-btn" onclick="openPanelSwitchModal()" title="Switch panel">
-      <div>
-        <span class="pid-label">PANEL ID</span>
-        <span class="pid-value" id="header-panel-id">——</span>
-      </div>
+    <button class="settings-btn" onclick="openSettings()" title="Settings" aria-label="Settings">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
     </button>
   </div>
 
@@ -860,17 +926,6 @@
   </div>
   <div class="toggle-row">
     <div>
-      <span class="toggle-label">Ghosting Fix</span>
-      <div class="toggle-hint">Raise if faint lines appear next to lit pixels · applies instantly</div>
-    </div>
-    <div class="walk-stepper">
-      <button class="step-btn" onclick="adjustLatch(-1)" aria-label="Less">−</button>
-      <div class="walk-val" id="latch-val">4</div>
-      <button class="step-btn" onclick="adjustLatch(1)" aria-label="More">+</button>
-    </div>
-  </div>
-  <div class="toggle-row">
-    <div>
       <span class="toggle-label">Demo Mode</span>
       <div class="toggle-hint">Panel cycles random lines every 45 s · saves instantly</div>
     </div>
@@ -905,28 +960,67 @@
   <div class="color-swatches" id="color-swatches"></div>
 </div>
 
-<!-- Panel WiFi -->
-<div class="section">
-  <div class="section-label">07 — Panel WiFi</div>
-  <div class="wifi-now" id="wifi-now">Panel network: —</div>
-  <div class="wifi-now">
-    Getting a new router or changing the password? Add the new network here
-    <b>while the panel is still online</b>. It keeps both and switches by itself
-    when the old one goes away.
-  </div>
-  <input class="wifi-field" id="wifi-ssid" placeholder="New network name" autocomplete="off"
-         autocorrect="off" autocapitalize="none" spellcheck="false" maxlength="32">
-  <input class="wifi-field" id="wifi-pass" placeholder="Password" type="password"
-         autocomplete="new-password" maxlength="63">
-  <div class="wifi-actions">
-    <button class="wifi-send" id="wifi-send" onclick="sendWifi()">SEND TO PANEL</button>
-  </div>
-  <div class="wifi-state" id="wifi-state"></div>
-</div>
-
 <button class="save-btn" id="save-btn" onclick="saveConfig()">SAVE TO PANEL</button>
 
 <div class="toast" id="toast"></div>
+
+<!-- Settings sheet -->
+<div class="modal-overlay" id="settings-modal" onclick="closeSettings(event)">
+  <div class="modal settings-sheet">
+    <button class="modal-close" onclick="closeSettings()">×</button>
+    <div class="modal-title">SETTINGS</div>
+
+    <div class="settings-group">
+      <div class="section-label">Panel</div>
+      <div class="settings-row">
+        <div>
+          <div class="settings-value" id="settings-panel-id">——</div>
+          <div class="settings-sub" id="settings-status">Checking panel…</div>
+        </div>
+        <button class="settings-link-btn" onclick="openPanelSwitchModal()">SWITCH PANEL</button>
+      </div>
+      <div class="settings-row">
+        <div>
+          <span class="toggle-label">Firmware</span>
+          <div class="settings-sub" id="settings-fw">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <div class="section-label">Display</div>
+      <div class="settings-row">
+        <div>
+          <span class="toggle-label">Ghosting Fix</span>
+          <div class="toggle-hint">Raise if faint lines appear next to lit pixels · applies instantly</div>
+        </div>
+        <div class="walk-stepper">
+          <button class="step-btn" onclick="adjustLatch(-1)" aria-label="Less">−</button>
+          <div class="walk-val" id="latch-val">4</div>
+          <button class="step-btn" onclick="adjustLatch(1)" aria-label="More">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <div class="section-label">Panel WiFi</div>
+      <div class="wifi-now" id="wifi-now">Panel network: —</div>
+      <div class="wifi-now">
+        Getting a new router or changing the password? Add the new network here
+        <b>while the panel is still online</b>. It keeps both and switches by itself
+        when the old one goes away.
+      </div>
+      <input class="wifi-field" id="wifi-ssid" placeholder="New network name" autocomplete="off"
+             autocorrect="off" autocapitalize="none" spellcheck="false" maxlength="32">
+      <input class="wifi-field" id="wifi-pass" placeholder="Password" type="password"
+             autocomplete="new-password" maxlength="63">
+      <div class="wifi-actions">
+        <button class="wifi-send" id="wifi-send" onclick="sendWifi()">SEND TO PANEL</button>
+      </div>
+      <div class="wifi-state" id="wifi-state"></div>
+    </div>
+  </div>
+</div>
 
 <!-- Switch panel -->
 <div class="modal-overlay" id="panel-switch-modal" onclick="closePanelSwitchModal(event)">
@@ -1010,7 +1104,7 @@ function validId(v) { return /^[A-Z0-9]{4,8}$/.test(v); }
 function usePanel(id) {
   panelId = id;
   localStorage.setItem('panelId', id);
-  document.getElementById('header-panel-id').textContent = id;
+  document.getElementById('settings-panel-id').textContent = id;
   init();
 }
 
@@ -1031,6 +1125,7 @@ function openPanelSwitchModal() {
   document.getElementById('switch-panel-input').value = '';
   document.getElementById('modal-current-id').textContent = panelId || '—';
   document.getElementById('panel-switch-modal').classList.add('open');
+  setTimeout(() => document.getElementById('switch-panel-input').focus(), 300);
 }
 
 function closePanelSwitchModal(e) {
@@ -1071,16 +1166,33 @@ async function refreshStatus() {
       text = `Offline · seen ${ago(s.last_seen_s)}`;
       dot.className = 'status-dot offline';
     }
-    if (s.fw_build) {
-      text += ` · fw ${s.fw_build}`;
-      if (s.latest_fw_build && s.latest_fw_build > s.fw_build) text += ` → ${s.latest_fw_build}`;
-    }
     txt.textContent = text;
+    document.getElementById('settings-status').textContent = text;
+
+    let fw = 'Not reported yet';
+    if (s.fw_build) {
+      fw = `Build ${s.fw_build}`;
+      if (s.latest_fw_build && s.latest_fw_build > s.fw_build) fw += ` → ${s.latest_fw_build} (updating)`;
+      else fw += ' · up to date';
+    }
+    document.getElementById('settings-fw').textContent = fw;
   } catch (e) {
     dot.className = 'status-dot offline';
     txt.textContent = 'Server unreachable';
   }
   refreshWifi();
+}
+
+// ── Settings sheet ────────────────────────────────────────────────────────
+function openSettings() {
+  document.getElementById('settings-panel-id').textContent = panelId || '——';
+  document.getElementById('settings-modal').classList.add('open');
+  refreshStatus();
+}
+
+function closeSettings(e) {
+  if (e && e.target !== document.getElementById('settings-modal')) return;
+  document.getElementById('settings-modal').classList.remove('open');
 }
 
 // ── Panel WiFi hand-off ───────────────────────────────────────────────────
@@ -1161,7 +1273,7 @@ async function init() {
     document.getElementById('pair-overlay').classList.add('open');
     return;
   }
-  document.getElementById('header-panel-id').textContent = panelId;
+  document.getElementById('settings-panel-id').textContent = panelId;
 
   let cfg;
   try {
@@ -1201,18 +1313,37 @@ async function init() {
 }
 
 // ── Lines & stations ──────────────────────────────────────────────────────
+// Lines grouped by trunk colour (ordered so groups pack into tidy rows).
+const LINE_GROUPS = [
+  ['1', '2', '3'], ['4', '5', '6'], ['7'],
+  ['A', 'C', 'E'], ['B', 'D', 'F', 'M'],
+  ['N', 'Q', 'R', 'W'], ['J', 'Z'], ['G'],
+  ['L'], ['SI'],
+];
+
 function buildLineGrid() {
   const grid = document.getElementById('line-grid');
   grid.innerHTML = '';
-  Object.keys(DIRECTIONS).forEach(id => {
-    const btn = document.createElement('button');
-    btn.className = 'line-btn' + (id === selectedLine ? ' selected' : '');
-    btn.textContent = id;
-    btn.style.background = LINE_COLORS[id];
-    btn.style.color = ['N', 'Q', 'R', 'W'].includes(id) ? '#000' : '#fff';
-    btn.dataset.id = id;
-    btn.onclick = () => selectLine(id);
-    grid.appendChild(btn);
+  const known = new Set(Object.keys(DIRECTIONS));
+  const groups = LINE_GROUPS.map(g => g.filter(id => known.has(id))).filter(g => g.length);
+  const placed = new Set(groups.flat());
+  const extra = [...known].filter(id => !placed.has(id));   // any line added server-side later
+  if (extra.length) groups.push(extra);
+
+  groups.forEach(group => {
+    const box = document.createElement('div');
+    box.className = 'line-group';
+    group.forEach(id => {
+      const btn = document.createElement('button');
+      btn.className = 'line-btn' + (id === selectedLine ? ' selected' : '');
+      btn.textContent = id;
+      btn.style.background = LINE_COLORS[id];
+      btn.style.color = ['N', 'Q', 'R', 'W'].includes(id) ? '#000' : '#fff';
+      btn.dataset.id = id;
+      btn.onclick = () => selectLine(id);
+      box.appendChild(btn);
+    });
+    grid.appendChild(box);
   });
 }
 
