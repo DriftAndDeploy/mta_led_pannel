@@ -171,6 +171,9 @@ protects against crashes, not against firmware that runs but misbehaves.
   layout for your line and station, ↑ uptown (N) on top and ↓ downtown (S)
   below — a small arrow next to each bullet tells them apart. Turning it on
   turns Two Trains off and vice versa.
+- **Text color** (section 06): the train time's color. Turn on **Use for All
+  Text** to also use it for leave-by, weather, service alerts and "ARRIVING"
+  (line bullets and holiday greetings keep their own colors).
 - **Two Trains** (**Display Options → Two Trains**): two rows, each a bullet
   and a big arrival time, right-aligned so the colons line up. A yellow/red dot
   after a time means delays/suspension on that line. Pick the second train with

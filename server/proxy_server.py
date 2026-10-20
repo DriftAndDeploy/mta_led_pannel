@@ -117,6 +117,7 @@ DEFAULT_CONFIG = {
     "time_r":        255,
     "time_g":        255,
     "time_b":        255,
+    "color_all":     False,  # use the time colour for all panel text
     "auto_update":   True,
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
     "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
@@ -265,6 +266,7 @@ CONFIG_SCHEMA = {
     "time_r":        _int_range(0, 255),
     "time_g":        _int_range(0, 255),
     "time_b":        _int_range(0, 255),
+    "color_all":     _bool,
     "auto_update":   _bool,
     "latch_blanking": _int_range(1, 8),
     "show_weather":  _bool,
@@ -957,6 +959,7 @@ def next_trains():
         "latch_blanking": cfg["latch_blanking"],
         "panel_off":      1 if cfg["panel_off"] or night_off(cfg, now) else 0,
         "time_r": cfg["time_r"], "time_g": cfg["time_g"], "time_b": cfg["time_b"],
+        "color_all":      1 if cfg["color_all"] else 0,
         "fw_build":       fw["build"] if fw else 0,
         "error":          error,
         # weather strip: wx=0 hides it (turned off, or no weather data)

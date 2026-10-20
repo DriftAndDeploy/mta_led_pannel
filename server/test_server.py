@@ -127,6 +127,7 @@ class Api(unittest.TestCase):
         self.assertEqual(j["service_status"], 1)
         self.assertEqual((j["logo_r"], j["logo_g"], j["logo_b"]), (167, 169, 172))
         self.assertEqual(j["latch_blanking"], 4)
+        self.assertEqual(j["color_all"], 0)
         status = self.client.get("/api/status?panel_id=ABC123").get_json()
         self.assertTrue(status["online"])
         self.assertEqual(status["fw_build"], 600)

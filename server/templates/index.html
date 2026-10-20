@@ -496,14 +496,9 @@
   #time-color::-webkit-color-swatch-wrapper { padding: 0; border-radius: 5px; }
   #time-color::-webkit-color-swatch { border: none; border-radius: 5px; }
 
-  .color-preview-label {
-    font-size: 12px;
-    color: var(--muted);
-    letter-spacing: 1px;
-    flex: 1;
-  }
 
   .color-reset-btn {
+    margin-left: auto;
     background: none;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -1165,13 +1160,22 @@
 
 <!-- Time colour -->
 <div class="section">
-  <div class="section-label">06 — Train Time Color</div>
+  <div class="section-label">06 — Text Color</div>
   <div class="color-row">
     <input type="color" id="time-color" value="#ffffff" oninput="onTimeColorChange(this.value)">
-    <span class="color-preview-label" id="color-label">#FFFFFF</span>
     <button class="color-reset-btn" onclick="setTimeColor('#ffffff')">Reset</button>
   </div>
   <div class="color-swatches" id="color-swatches"></div>
+  <div class="toggle-row" style="margin-top:18px">
+    <div>
+      <span class="toggle-label">Use for All Text</span>
+      <div class="toggle-hint" id="color-all-hint">Off: only the train time uses this color</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-color-all" onchange="updateColorAllHint()">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
 </div>
 
 <button class="save-btn" id="save-btn" onclick="saveConfig()">SAVE TO PANEL</button>
@@ -1655,6 +1659,8 @@ async function init() {
   updatePowerButton();
   setBrightnessUI(cfg.brightness || 80);
   setTimeColor(rgbToHex(cfg.time_r ?? 255, cfg.time_g ?? 255, cfg.time_b ?? 255));
+  document.getElementById('toggle-color-all').checked = !!cfg.color_all;
+  updateColorAllHint();
 
   buildLineGrid();
   updatePlatformUI();
@@ -2174,8 +2180,14 @@ function buildSwatches() {
 
 function onTimeColorChange(hex) {
   hex = hex.toLowerCase();
-  document.getElementById('color-label').textContent = hex.toUpperCase();
   document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s.dataset.hex === hex));
+}
+
+function updateColorAllHint() {
+  document.getElementById('color-all-hint').textContent =
+    document.getElementById('toggle-color-all').checked
+      ? 'On: train times, leave-by, weather, alerts and "ARRIVING" all use this color'
+      : 'Off: only the train time uses this color';
 }
 
 function setTimeColor(hex) {
@@ -2221,6 +2233,7 @@ async function saveConfig() {
     show_alerts:   document.getElementById('toggle-alerts').checked,
     minimalist:    document.getElementById('toggle-minimalist').checked,
     time_r: r, time_g: g, time_b: b,
+    color_all:     document.getElementById('toggle-color-all').checked,
   };
   if (t2?.line && t2?.station) {
     Object.assign(update, { line2: t2.line, stop_parent2: t2.station.id, stop_name2: t2.station.name,

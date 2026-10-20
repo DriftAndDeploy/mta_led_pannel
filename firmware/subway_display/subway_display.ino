@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.9.0"
-#define FW_BUILD   690
+#define FW_VERSION "7.0.0"
+#define FW_BUILD   700
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -81,6 +81,7 @@ struct PanelState {
   char     line[4]        = "L";
   uint8_t  logo_r = 167, logo_g = 169, logo_b = 172;
   uint8_t  time_r = 255, time_g = 255, time_b = 255;
+  bool     color_all      = false;  // time colour for all text, not just the time
   uint8_t  brightness     = 80;
   uint8_t  latch_blanking = LATCH_BLANKING;
   uint8_t  service_status = 0;      // 0 normal, 1 delays/changes, 2 suspended
@@ -162,7 +163,8 @@ void drawMinimalist(const PanelState& s);
 void drawLogoAt(int cx, int cy, const PanelState& s);
 void drawBullet(int cx, int cy, int r, const char* l, uint8_t cr, uint8_t cg, uint8_t cb);
 void drawDual(const PanelState& s);
-void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8_t b);
+void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8_t b, uint16_t textColor);
+uint16_t textColor(const PanelState& s, uint16_t normal);
 void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
@@ -588,6 +590,7 @@ bool fetchTrainTimes() {
   n.time_r         = doc["time_r"]  | 255;
   n.time_g         = doc["time_g"]  | 255;
   n.time_b         = doc["time_b"]  | 255;
+  n.color_all      = (doc["color_all"] | 0) != 0;
   n.brightness     = constrain((int)(doc["brightness"] | 80), 0, 100);
   n.latch_blanking = constrain((int)(doc["latch_blanking"] | (int)LATCH_BLANKING), 1, 8);
   n.service_status = doc["service_status"] | 0;
@@ -743,8 +746,9 @@ void render(const PanelState& in) {
   if (anim_train) {
     uint32_t e = millis() - anim_start;
     if (e < ARRIVAL_ANIM_MS) {
-      if (anim_train == 1) drawArrival(e, s.line,  s.logo_r,  s.logo_g,  s.logo_b);
-      else                 drawArrival(e, s.line2, s.logo2_r, s.logo2_g, s.logo2_b);
+      uint16_t tc = textColor(s, dma_display->color565(220, 220, 220));
+      if (anim_train == 1) drawArrival(e, s.line,  s.logo_r,  s.logo_g,  s.logo_b,  tc);
+      else                 drawArrival(e, s.line2, s.logo2_r, s.logo2_g, s.logo2_b, tc);
       return;
     }
     anim_train = 0;
@@ -796,6 +800,12 @@ void render(const PanelState& in) {
   present();
 }
 
+// Colour for a piece of text: its usual colour, or the user's time colour
+// when "Use for All Text" is on.
+uint16_t textColor(const PanelState& s, uint16_t normal) {
+  return s.color_all ? dma_display->color565(s.time_r, s.time_g, s.time_b) : normal;
+}
+
 // Normal layout
 //   Top half    : train time, textSize 2, centred.
 //   Bottom half : logo (left while scrolling, centred otherwise) + ticker.
@@ -817,9 +827,9 @@ void drawNormal(const PanelState& s) {
   if (scrolling) {
     // Order: leave by (white), weather, service alert (yellow).
     int cx = scroll_x;
-    cx = drawRun(leave_part, cx, TEXT_Y, dma_display->color565(255, 255, 255));
-    if (weather) cx = drawRun(wx_part, cx, TEXT_Y, WX_TEXT_COLOR) + WX_GAP;
-    cx = drawRun(alert_part, cx, TEXT_Y, dma_display->color565(255, 220, 0));
+    cx = drawRun(leave_part, cx, TEXT_Y, textColor(s, dma_display->color565(255, 255, 255)));
+    if (weather) cx = drawRun(wx_part, cx, TEXT_Y, textColor(s, WX_TEXT_COLOR)) + WX_GAP;
+    cx = drawRun(alert_part, cx, TEXT_Y, textColor(s, dma_display->color565(255, 220, 0)));
     // Clip: blank the logo column so glyphs slide smoothly under its edge.
     dma_display->fillRect(0, 16, SCROLL_MIN, 16, 0);
 
@@ -828,7 +838,7 @@ void drawNormal(const PanelState& s) {
   } else if (weather) {
     // Nothing to scroll: weather sits still beside the logo.
     int w = runWidth(wx_part);
-    drawRun(wx_part, SCROLL_MIN + (PANEL_RES_X - SCROLL_MIN - w) / 2, TEXT_Y, WX_TEXT_COLOR);
+    drawRun(wx_part, SCROLL_MIN + (PANEL_RES_X - SCROLL_MIN - w) / 2, TEXT_Y, textColor(s, WX_TEXT_COLOR));
   }
 
   drawLogoAt(scrolling || weather ? 8 : 32, 24, s);
@@ -851,7 +861,7 @@ void drawMinimalist(const PanelState& s) {
   dma_display->setCursor(startX + 14 + GAP, cy - 4);
   dma_display->print(s.train_time);
 
-  if (weather) drawRun(wx_part, (PANEL_RES_X - runWidth(wx_part)) / 2, 24, WX_TEXT_COLOR);
+  if (weather) drawRun(wx_part, (PANEL_RES_X - runWidth(wx_part)) / 2, 24, textColor(s, WX_TEXT_COLOR));
 
   drawStatusDot(s.service_status);
 }
@@ -991,7 +1001,7 @@ static void drawTrainSprite(int x0, uint16_t stripe) {
   }
 }
 
-void drawArrival(uint32_t e, const char* line, uint8_t r, uint8_t g, uint8_t b) {
+void drawArrival(uint32_t e, const char* line, uint8_t r, uint8_t g, uint8_t b, uint16_t textColor) {
   int x;
   if (e < ANIM_IN_MS) {                                  // ease in, slowing to a stop
     float t = 1.0f - (float)e / ANIM_IN_MS;
@@ -1006,7 +1016,7 @@ void drawArrival(uint32_t e, const char* line, uint8_t r, uint8_t g, uint8_t b) 
   dma_display->clearScreen();
   drawBullet(7, 7, 6, line, r, g, b);
   dma_display->setTextSize(1);
-  dma_display->setTextColor(dma_display->color565(220, 220, 220));
+  dma_display->setTextColor(textColor);
   dma_display->setCursor(16, 4);
   dma_display->print("ARRIVING");
 
