@@ -639,6 +639,14 @@
   }
   @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 
+  /* Grab handle: drag the sheet down to close it */
+  .sheet-handle {
+    width: 40px; height: 4px;
+    border-radius: 2px;
+    background: #444;
+    margin: -16px auto 14px;
+  }
+
   .modal-title {
     font-family: 'Bebas Neue', sans-serif;
     font-size: 20px;
@@ -1055,6 +1063,7 @@
 <!-- Settings sheet -->
 <div class="modal-overlay" id="settings-modal" onclick="closeSettings(event)">
   <div class="modal settings-sheet">
+    <div class="sheet-handle"></div>
     <button class="modal-close" onclick="closeSettings()">×</button>
     <div class="modal-title">SETTINGS</div>
 
@@ -1130,6 +1139,7 @@
 <!-- Switch panel -->
 <div class="modal-overlay" id="panel-switch-modal" onclick="closePanelSwitchModal(event)">
   <div class="modal">
+    <div class="sheet-handle"></div>
     <button class="modal-close" onclick="closePanelSwitchModal()">×</button>
     <div class="modal-title">SWITCH PANEL</div>
     <div class="modal-sub">Enter the Panel ID shown on the board when it powers on</div>
@@ -1315,6 +1325,72 @@ function openSettings() {
 function closeSettings(e) {
   if (e && e.target !== document.getElementById('settings-modal')) return;
   document.getElementById('settings-modal').classList.remove('open');
+}
+
+// ── Swipe down to close a bottom sheet ────────────────────────────────────
+// Dragging starts only when the sheet is scrolled to the top, so swiping
+// inside a long sheet still scrolls it. Release past ~25% of the sheet
+// (max 120 px) or with a quick flick to close; otherwise it springs back.
+function enableSwipeToClose(overlayId, close) {
+  const overlay = document.getElementById(overlayId);
+  const sheet = overlay.querySelector('.modal');
+  let startY = 0, startT = 0, lastY = 0, lastT = 0, speed = 0, dy = 0;
+  let tracking = false, dragging = false;
+
+  const reset = closed => {
+    sheet.style.transition = sheet.style.transform = '';
+    overlay.style.transition = overlay.style.background = '';
+    if (closed) sheet.style.animation = '';   // lets the slide-up play next time
+  };
+
+  sheet.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { tracking = false; return; }
+    tracking = sheet.scrollTop <= 0;
+    dragging = false;
+    dy = speed = 0;
+    startY = lastY = e.touches[0].clientY;
+    startT = lastT = e.timeStamp;
+  }, { passive: true });
+
+  sheet.addEventListener('touchmove', e => {
+    if (!tracking) return;
+    const y = e.touches[0].clientY;
+    dy = y - startY;
+    if (!dragging) {
+      if (dy < -4) { tracking = false; return; }   // swiping up: let it scroll
+      if (dy < 8) return;
+      dragging = true;
+      sheet.style.animation = 'none';
+      sheet.style.transition = 'none';
+      overlay.style.transition = 'none';
+    }
+    e.preventDefault();                            // no page scroll / bounce while dragging
+    if (e.timeStamp > lastT) speed = (y - lastY) / (e.timeStamp - lastT);
+    lastY = y; lastT = e.timeStamp;
+    const d = Math.max(0, dy);
+    sheet.style.transform = `translateY(${d}px)`;
+    overlay.style.background = `rgba(0,0,0,${(0.7 * Math.max(0, 1 - d / sheet.offsetHeight)).toFixed(3)})`;
+  }, { passive: false });
+
+  const end = () => {
+    if (!dragging) { tracking = false; return; }
+    tracking = dragging = false;
+    sheet.style.transition = 'transform .22s ease-out';
+    overlay.style.transition = 'background .22s ease-out';
+    const avg = dy / Math.max(1, lastT - startT);   // px per ms over the whole drag
+    const flick = speed > 0.5 || (dy > 40 && avg > 0.4);
+    if (dy > Math.min(120, sheet.offsetHeight * 0.25) || flick) {
+      sheet.style.transform = 'translateY(100%)';
+      overlay.style.background = 'rgba(0,0,0,0)';
+      setTimeout(() => { close(); reset(true); }, 220);
+    } else {
+      sheet.style.transform = 'translateY(0)';
+      overlay.style.background = '';
+      setTimeout(() => reset(false), 220);
+    }
+  };
+  sheet.addEventListener('touchend', end);
+  sheet.addEventListener('touchcancel', end);
 }
 
 // ── Panel WiFi hand-off ───────────────────────────────────────────────────
@@ -1801,6 +1877,8 @@ document.addEventListener('visibilitychange', () => {
 });
 
 buildSwatches();
+enableSwipeToClose('settings-modal', () => closeSettings());
+enableSwipeToClose('panel-switch-modal', () => closePanelSwitchModal());
 init();
 </script>
 </body>
