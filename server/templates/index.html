@@ -34,6 +34,14 @@
     padding: 14px 16px 12px;
     border-bottom: 1px solid var(--border);
   }
+  /* iPhone/iPad Safari: Safari 26 blurs the strip just under the status bar
+     (its "scroll edge effect"). Start the controls a little lower so they sit
+     clear of it at the top of the page; content still blurs under it when
+     scrolled, which is the intended look. env() covers any future
+     edge-to-edge layout. */
+  @supports (-webkit-touch-callout: none) {
+    header { padding-top: max(26px, calc(env(safe-area-inset-top) + 12px)); }
+  }
 
   .header-controls {
     display: flex;
