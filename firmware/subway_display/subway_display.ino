@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.4.0"
-#define FW_BUILD   640
+#define FW_VERSION "6.4.1"
+#define FW_BUILD   641
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -770,8 +770,10 @@ void drawStatusDot(uint8_t status) {
   uint16_t c = status == 2 ? dma_display->color565(220,  40,  40)   // suspended
              : status == 1 ? dma_display->color565(255, 200,   0)   // delays
              :               dma_display->color565(  0, 200,  80);  // good
-  // 2x2 block in the top-left corner, 1 px in from the top and left edges.
-  dma_display->fillRect(1, 1, 2, 2, c);
+  // 2x2 block in the top-left corner: 1 px down, 2 px in. The panel has no
+  // working LEDs at (0,2) and (1,2) (same spot mirrored in every corner),
+  // so the dot starts at x=2 to stay clear of them.
+  dma_display->fillRect(2, 1, 2, 2, c);
 }
 
 // Cycles every 4 s: green 2x2 dots -> yellow 2x2 dots -> dim full white.
