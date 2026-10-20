@@ -126,6 +126,30 @@
     margin-bottom: 14px;
   }
 
+  /* Collapsible section (04 Display Options) */
+  .collapse-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    width: 100%; background: none; border: none; padding: 0; margin-bottom: 14px;
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+  }
+  .collapse-head .section-label { margin-bottom: 0; }
+  .collapse-chevron {
+    flex-shrink: 0; color: #8ecbff; transition: transform .25s ease;
+  }
+  .collapsed .collapse-chevron { transform: rotate(-90deg); }
+  .collapse-summary {
+    display: none; font-size: 11px; color: var(--muted); letter-spacing: .5px; line-height: 1.6;
+    margin: -6px 0 0;
+  }
+  .collapsed .collapse-summary { display: block; }
+  .collapse-summary b { color: var(--text); font-weight: 400; }
+  .collapse-body {
+    display: grid; grid-template-rows: 1fr;
+    transition: grid-template-rows .3s ease, opacity .25s ease;
+  }
+  .collapse-body > div { overflow: hidden; min-height: 0; }
+  .collapsed .collapse-body { grid-template-rows: 0fr; opacity: 0; }
+
   /* Line grid — one cluster per trunk colour; clusters wrap as a unit */
   .line-grid {
     display: flex;
@@ -1028,9 +1052,15 @@
   </div>
 </div>
 
-<!-- Display options -->
-<div class="section">
-  <div class="section-label">04 — Display Options</div>
+<!-- Display options (collapsible; shows a one-line summary when collapsed) -->
+<div class="section" id="options-section">
+  <button class="collapse-head" onclick="toggleOptions()" aria-expanded="true" aria-controls="options-body">
+    <span class="section-label">04 — Display Options</span>
+    <svg class="collapse-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  </button>
+  <div class="collapse-summary" id="options-summary" onclick="toggleOptions()">—</div>
+  <div class="collapse-body" id="options-body"><div>
   <div class="toggle-row">
     <div>
       <span class="toggle-label">Two Trains</span>
@@ -1117,6 +1147,7 @@
     <span id="dual-note-mode">Two Trains</span> is on: the panel shows two times, so leave-by,
     alerts, weather and minimalist mode are paused. Service problems show as a dot next to the time.
   </div>
+  </div></div>
 </div>
 
 <!-- Walk time -->
@@ -1754,6 +1785,7 @@ function updateMinimalistUI() {
   document.getElementById('dual-note-mode').textContent = bothOn ? 'Both Directions' : 'Two Trains';
   // Platform choice doesn't matter when both directions are shown.
   document.querySelector('.platform-toggle').closest('.section').style.opacity = bothOn ? '0.35' : '1';
+  updateOptionsSummary();
 }
 
 async function onBothDirs(on) {
@@ -1773,6 +1805,39 @@ async function onBothDirs(on) {
     updateMinimalistUI();
     updatePreview();
   }
+}
+
+// ── Collapsible Display Options ───────────────────────────────────────────
+// Collapsed by default; the choice is remembered on this device.
+function setOptionsCollapsed(collapsed) {
+  const sec = document.getElementById('options-section');
+  sec.classList.toggle('collapsed', collapsed);
+  sec.querySelector('.collapse-head').setAttribute('aria-expanded', String(!collapsed));
+  try { localStorage.setItem('optionsCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+}
+
+function toggleOptions() {
+  setOptionsCollapsed(!document.getElementById('options-section').classList.contains('collapsed'));
+}
+
+// One line saying what the panel is actually showing, for the collapsed view.
+function updateOptionsSummary() {
+  const on = id => document.getElementById(id).checked;
+  const twoRows = dualOn || bothOn, minimal = on('toggle-minimalist');
+  const parts = [];
+  if (dualOn) parts.push('Two trains');
+  if (bothOn) parts.push('Both directions');
+  if (!twoRows && minimal) parts.push('Minimalist');
+  if (!twoRows && !minimal && on('toggle-leave-by')) parts.push('Leave by');
+  if (!twoRows && !minimal && on('toggle-alerts')) parts.push('Alerts');
+  if (!twoRows && on('toggle-weather')) parts.push('Weather');
+  if (on('toggle-animations')) parts.push('Animations');
+  if (on('toggle-night')) {
+    parts.push(`Night off ${clockLabel(document.getElementById('night-start').value || '01:00')}–` +
+               clockLabel(document.getElementById('night-end').value || '06:00'));
+  }
+  document.getElementById('options-summary').innerHTML =
+    parts.length ? 'On: ' + parts.map(p => `<b>${p}</b>`).join(' · ') : 'Train time only';
 }
 
 // ── Two trains ────────────────────────────────────────────────────────────
@@ -2189,6 +2254,13 @@ document.addEventListener('visibilitychange', () => {
 
 buildSwatches();
 drawEggTurtle();
+(() => {
+  let collapsed = true;
+  try { collapsed = localStorage.getItem('optionsCollapsed') !== '0'; } catch (e) {}
+  setOptionsCollapsed(collapsed);
+  // Any toggle or time change in the section refreshes the summary.
+  document.getElementById('options-body').addEventListener('change', () => setTimeout(updateOptionsSummary, 0));
+})();
 enableSwipeToClose('settings-modal', () => closeSettings());
 enableSwipeToClose('panel-switch-modal', () => closePanelSwitchModal());
 init();
