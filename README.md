@@ -153,7 +153,15 @@ protects against crashes, not against firmware that runs but misbehaves.
 - **Animations** (**Display Options → Animations**): when a train is due at your
   station within a minute, the panel shows the bullet + "ARRIVING" and a little
   two-car train in the line's colour pulls in, stops and leaves (~4 s), once per
-  train — for both trains in two-train mode. **Preview on panel** plays it now.
+  train — for both trains in two-train mode. **Preview train** plays it now.
+  Also with Animations on: on holidays and on the solstices/equinoxes the whole
+  panel plays a 10 s themed animation every 10 minutes — fireworks (New Year's
+  Day/Eve, July 4th), hearts (Valentine's), shamrocks (St. Patrick's), eggs
+  (Easter), jack-o'-lantern (Halloween), leaves (Thanksgiving, fall equinox),
+  tree (Christmas Eve/Day), flag (Presidents, Memorial, Labor, Veterans Day),
+  stars (MLK Day, Juneteenth), flowers / sun / snow (spring, summer, winter).
+  **Preview a holiday** shows the next one each time you tap it. Solstice and
+  equinox dates are calculated (accurate to about a minute, NYC time).
 - **Night Schedule** (**Display Options → Night Schedule**): the panel goes dark
   between the **Off at** and **On at** times (default 1:00–6:00 AM, NYC time;
   can cross midnight). Tapping the power button during that window turns it

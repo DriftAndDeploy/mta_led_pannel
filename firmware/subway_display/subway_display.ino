@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.7.0"
-#define FW_BUILD   670
+#define FW_VERSION "6.8.0"
+#define FW_BUILD   680
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -59,6 +59,8 @@ const uint32_t OFFLINE_REBOOT_MS = 300000;  // reboot if WiFi is gone this long
 const uint32_t FRAME_MS          = 40;      // render rate; one scroll px per frame
 const uint32_t ID_SPLASH_MS      = 15000;   // Panel ID screen on power-up
 const uint32_t ARRIVAL_ANIM_MS   = 4300;    // arriving-train animation length
+const uint32_t OCCASION_MS       = 10000;   // holiday/season animation length...
+const uint32_t OCCASION_EVERY_MS = 600000;  // ...played every 10 minutes
 const uint32_t HTTP_TIMEOUT_MS   = 8000;
 
 // Panel driving. latch_blanking hides the "ghost" glow / faint lines that
@@ -95,6 +97,9 @@ struct PanelState {
   uint8_t  service_status2 = 0;
   uint32_t arriving       = 0;      // nonzero: train 1 pulling in (play animation once per id)
   uint32_t arriving2      = 0;      // same for train 2
+  uint8_t  occasion       = 0;      // OCC_* holiday/season animation (0 = none)
+  char     occasion_label[24] = "";
+  uint32_t occasion_seq   = 0;      // changes -> play now (previews)
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
   bool     panel_off      = false;
@@ -157,6 +162,7 @@ void drawLogoAt(int cx, int cy, const PanelState& s);
 void drawBullet(int cx, int cy, int r, const char* l, uint8_t cr, uint8_t cg, uint8_t cb);
 void drawDual(const PanelState& s);
 void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8_t b);
+void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -598,6 +604,9 @@ bool fetchTrainTimes() {
   n.service_status2 = doc["service_status2"] | 0;
   n.arriving       = doc["arriving"]  | 0u;
   n.arriving2      = doc["arriving2"] | 0u;
+  n.occasion       = doc["occasion"] | 0;
+  copyStr(n.occasion_label, sizeof(n.occasion_label), doc["occasion_label"] | "");
+  n.occasion_seq   = doc["occasion_seq"] | 0u;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
   n.panel_off      = (doc["panel_off"]  | 0) != 0;
@@ -719,8 +728,10 @@ void render(const PanelState& in) {
   // Arriving-train animation: once per train id, only on fresh data.
   static uint32_t played1 = 0, played2 = 0, anim_start = 0;
   static uint8_t  anim_train = 0;   // 0 none, 1 = train 1, 2 = train 2
+  static uint32_t occ_played = 0, occ_last = 0, occ_start = 0;
+  static bool     occ_on = false;
   bool fresh = millis() - s.updated_ms < 30000;
-  if (!anim_train && fresh) {
+  if (!anim_train && !occ_on && fresh) {
     if (s.arriving && s.arriving != played1) {
       played1 = s.arriving; anim_train = 1; anim_start = millis();
     } else if (s.dual && s.arriving2 && s.arriving2 != played2) {
@@ -735,6 +746,25 @@ void render(const PanelState& in) {
       return;
     }
     anim_train = 0;
+  }
+
+  // Holiday / season animation: right away when the sequence changes (new
+  // day or a preview), then every 10 minutes while the server sends one.
+  if (!anim_train && !occ_on && fresh && s.occasion) {
+    if (s.occasion_seq != occ_played || millis() - occ_last >= OCCASION_EVERY_MS) {
+      occ_on = true;
+      occ_start = millis();
+      occ_played = s.occasion_seq;
+    }
+  }
+  if (occ_on) {
+    uint32_t e = millis() - occ_start;
+    if (e < OCCASION_MS) {
+      drawOccasion(e, s.occasion, s.occasion_label);
+      return;
+    }
+    occ_on = false;
+    occ_last = millis();
   }
 
   // Rebuild the ticker text only when new data arrives.
@@ -960,6 +990,343 @@ void drawArrival(uint32_t e, const char* line, uint8_t r, uint8_t g, uint8_t b) 
   for (int sx = 1; sx < PANEL_RES_X; sx += 4)                                           // sleepers
     dma_display->drawPixel(sx, 31, dma_display->color565(50, 35, 20));
   drawTrainSprite(x, dma_display->color565((uint8_t)(r * 0.9f), (uint8_t)(g * 0.9f), (uint8_t)(b * 0.9f)));
+  present();
+}
+
+// ---------------------------------------------------------------------------
+// Holiday / season animations (10 s, full panel). The server picks the
+// occasion; numbers match OCC_KINDS in server/proxy_server.py. Everything is
+// drawn as a pure function of elapsed time (no state), using a hash for
+// "random" placement so each frame is consistent with the last.
+// ---------------------------------------------------------------------------
+enum {
+  OCC_FIREWORKS = 1, OCC_FIREWORKS_USA, OCC_HEARTS, OCC_SHAMROCKS, OCC_EGGS,
+  OCC_PUMPKIN, OCC_LEAVES, OCC_TREE, OCC_FLAG, OCC_STARS, OCC_FLOWERS,
+  OCC_SUN, OCC_SNOW, OCC_TURTLE
+};
+
+static uint32_t hsh(uint32_t x) {
+  x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
+  return x;
+}
+static inline uint16_t rgb(int r, int g, int b) {
+  return dma_display->color565(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
+}
+static inline uint16_t rgbk(const uint8_t* c, float k) { return rgb(c[0] * k, c[1] * k, c[2] * k); }
+static inline void px(int x, int y, uint16_t c) {
+  if (x >= 0 && x < PANEL_RES_X && y >= 0 && y < PANEL_RES_Y) dma_display->drawPixel(x, y, c);
+}
+// 5-px-wide bitmaps, bit 4 = leftmost pixel
+static void bits5(int x, int y, const uint8_t* rows, int n, uint16_t c) {
+  for (int r = 0; r < n; r++)
+    for (int b = 0; b < 5; b++)
+      if (rows[r] & (0x10 >> b)) px(x + b, y + r, c);
+}
+
+// 7-px-wide bitmaps, bit 6 = leftmost pixel
+static void bits7(int x, int y, const uint8_t* rows, int n, uint16_t c) {
+  for (int r = 0; r < n; r++)
+    for (int b = 0; b < 7; b++)
+      if (rows[r] & (0x40 >> b)) px(x + b, y + r, c);
+}
+
+// Label along the bottom with a dark outline so it reads over the scene.
+// Fits -> centred and still; too long -> scrolls across once in 10 s.
+static void drawLabel(uint32_t e, const char* label, uint16_t c) {
+  if (!label[0]) return;
+  int w = strlen(label) * 6 - 1;
+  int x = (w <= PANEL_RES_X - 2) ? (PANEL_RES_X - w) / 2
+        : PANEL_RES_X - (int)((uint64_t)e * (PANEL_RES_X + w) / OCCASION_MS);
+  const int y = 24;
+  dma_display->setTextSize(1);
+  dma_display->setTextColor(0);
+  for (int d = 0; d < 4; d++) {
+    dma_display->setCursor(x + (d == 0) - (d == 1), y + (d == 2) - (d == 3));
+    dma_display->print(label);
+  }
+  dma_display->setTextColor(c);
+  dma_display->setCursor(x, y);
+  dma_display->print(label);
+}
+
+// Fireworks: a rocket every 0.65 s rises, bursts into 14 sparks that
+// spread, sag with gravity and fade.
+static void drawFireworks(uint32_t e, bool usa) {
+  static const uint8_t NY[][3] = {{255, 200, 60}, {255, 255, 255}, {255, 80, 170}, {80, 200, 255}, {150, 255, 120}};
+  static const uint8_t US[][3] = {{230, 30, 30}, {210, 210, 210}, {40, 90, 255}};
+  const uint32_t GAP = 480, LIFE = 2000, RISE = 500;
+  for (int k = (int)(e / GAP) - 3; k <= (int)(e / GAP); k++) {
+    if (k < 0) continue;
+    uint32_t t = e - k * GAP;
+    if (t >= LIFE) continue;
+    uint32_t h = hsh(k * 2654435761U + 17);
+    int bx = 8 + h % 48, by = 4 + (h >> 8) % 11;
+    const uint8_t* c = usa ? US[(h >> 16) % 3] : NY[(h >> 16) % 5];
+    if (t < RISE) {
+      float p = (float)t / RISE;
+      int y = 31 - (int)((31 - by) * (1 - (1 - p) * (1 - p)));
+      px(bx, y, rgb(220, 190, 120));
+      px(bx, y + 1, rgb(90, 70, 40));
+    } else {
+      float p = (float)(t - RISE) / (LIFE - RISE);
+      float r = (9 + h % 4) * (1 - (1 - p) * (1 - p));
+      float fade = p < 0.5f ? 1.0f : 2 * (1 - p);          // full brightness, then fade
+      if (p < 0.08f) dma_display->fillCircle(bx, by, 1, rgb(255, 255, 220));   // flash
+      for (int i = 0; i < 18; i++) {
+        float a = i * 0.349f + (h % 100) * 0.01f;
+        float sag = 5.0f * p * p;
+        px(bx + lroundf(cosf(a) * r), by + lroundf(sinf(a) * r + sag), rgbk(c, fade));
+        px(bx + lroundf(cosf(a) * r * 0.7f), by + lroundf(sinf(a) * r * 0.7f + sag), rgbk(c, fade * 0.45f));
+      }
+    }
+  }
+}
+
+// Drifting particles: snow (falls), hearts (rise), shamrocks, leaves.
+enum { P_SNOW, P_HEART, P_SHAMROCK, P_LEAF };
+static const uint8_t SPR_FLAKE[3]    = {0x04, 0x0E, 0x04};
+static const uint8_t SPR_HEART[4]    = {0x0A, 0x1F, 0x0E, 0x04};
+static const uint8_t SPR_SHAMROCK[5] = {0x04, 0x0E, 0x1F, 0x1B, 0x04};
+static const uint8_t SPR_LEAF[4]     = {0x0C, 0x1E, 0x1C, 0x08};
+
+static void drawParticles(uint32_t e, int type, int count) {
+  static const uint8_t HEARTS[][3] = {{255, 40, 90}, {255, 120, 170}, {210, 0, 50}};
+  static const uint8_t LEAVES[][3] = {{230, 90, 0}, {200, 40, 0}, {230, 170, 0}, {150, 75, 20}};
+  for (int i = 0; i < count; i++) {
+    uint32_t h = hsh(i * 0x9E3779B9U + type * 101 + 7);
+    float speed = (type == P_SNOW ? 4 : 7) + (h % 8);          // px per second
+    int y = (int)((h >> 8) % 42 + e * speed / 1000.0f) % 42 - 6;
+    if (type == P_HEART) y = 30 - y;
+    float sway = sinf(e / 700.0f + (h % 628) / 100.0f) * (type == P_SNOW ? 1.5f : 2.5f);
+    int x = (int)((h >> 16) % 70) - 4 + lroundf(sway);
+    switch (type) {
+      case P_SNOW:
+        if (h & 3) px(x + 2, y + 1, rgb(190, 190, 215));
+        else       bits5(x, y, SPR_FLAKE, 3, rgb(225, 225, 255));
+        break;
+      case P_HEART:    bits5(x, y, SPR_HEART, 4, rgbk(HEARTS[(h >> 4) % 3], 1)); break;
+      case P_SHAMROCK: bits5(x, y, SPR_SHAMROCK, 5, (h >> 4) & 1 ? rgb(0, 190, 60) : rgb(70, 230, 90)); break;
+      case P_LEAF:     bits5(x, y, SPR_LEAF, 4, rgbk(LEAVES[(h >> 4) % 4], 1)); break;
+    }
+  }
+}
+
+static void drawGround(uint16_t c, int y = 21) {   // 2-row strip; label sits below on black
+  dma_display->fillRect(0, y, PANEL_RES_X, 2, c);
+}
+
+// Easter: five striped eggs hopping on the grass.
+static void drawEggs(uint32_t e) {
+  static const uint8_t C[][3] = {{255, 120, 180}, {110, 200, 255}, {255, 215, 60}, {150, 255, 130}, {200, 140, 255}};
+  for (int x = 0; x < PANEL_RES_X; x++) {
+    px(x, 22, rgb(20, 120, 30));
+    if (hsh(x + 5) % 3 == 0) px(x, 21, rgb(30, 150, 40));
+  }
+  for (int i = 0; i < 5; i++) {
+    int hop = (int)(fabsf(sinf(e / 260.0f + i * 1.3f)) * 6);
+    int x = 3 + i * 12, y = 15 - hop;
+    const uint8_t* a = C[i];
+    const uint8_t* b = C[(i + 2) % 5];
+    for (int r = 0; r < 7; r++) {
+      int x0 = (r == 0 || r == 6) ? 1 : 0, x1 = (r == 0 || r == 6) ? 3 : 4;
+      for (int c = x0; c <= x1; c++) {
+        bool stripe = (r == 2) || (r == 4 && (c % 2 == 0));
+        px(x + c, y + r, rgbk(stripe ? b : a, 0.9f));
+      }
+    }
+  }
+}
+
+// Halloween: jack-o'-lantern with a flickering face, bats flapping past.
+static void drawPumpkin(uint32_t e) {
+  const int cx = 32, cy = 12;
+  dma_display->fillCircle(cx - 5, cy, 6, rgb(190, 70, 0));
+  dma_display->fillCircle(cx + 5, cy, 6, rgb(190, 70, 0));
+  dma_display->fillCircle(cx, cy, 7, rgb(235, 100, 0));
+  dma_display->fillRect(cx - 1, cy - 10, 3, 3, rgb(40, 140, 30));
+  float flick = 0.7f + 0.3f * ((hsh(e / 90) % 100) / 100.0f);
+  uint16_t face = rgb(255 * flick, 210 * flick, 40 * flick);
+  dma_display->fillTriangle(cx - 6, cy - 1, cx - 2, cy - 1, cx - 4, cy - 4, face);
+  dma_display->fillTriangle(cx + 2, cy - 1, cx + 6, cy - 1, cx + 4, cy - 4, face);
+  dma_display->fillRect(cx - 6, cy + 2, 13, 3, face);
+  px(cx - 3, cy + 2, 0); px(cx + 3, cy + 2, 0); px(cx, cy + 4, 0);      // teeth
+  static const uint8_t UP[3]   = {0x41, 0x3E, 0x08};                     // 7 px wide
+  static const uint8_t DOWN[3] = {0x08, 0x3E, 0x41};
+  for (int i = 0; i < 3; i++) {
+    int x = (int)((e * (0.010f + i * 0.004f)) + i * 30) % 84 - 10;
+    int y = 1 + i * 2 + lroundf(sinf(e / 300.0f + i) * 2);
+    bits7(x, y, ((e / 150 + i) & 1) ? UP : DOWN, 3, rgb(150, 60, 210));
+  }
+}
+
+// Christmas: tree with blinking lights and a twinkling star, in the snow.
+static void drawTree(uint32_t e) {
+  drawParticles(e, P_SNOW, 22);
+  const int cx = 32;
+  for (int r = 0; r < 18; r++) {
+    int tier = r < 6 ? r : (r < 12 ? r - 3 : r - 6);   // three stacked tiers
+    int hw = 1 + tier * 2 / 3 + (r >= 12 ? 1 : 0);
+    dma_display->fillRect(cx - hw, 3 + r, hw * 2 + 1, 1, rgb(0, 120 + (r % 3) * 15, 40));
+  }
+  dma_display->fillRect(cx - 2, 21, 5, 2, rgb(110, 60, 20));
+  uint16_t star = ((e / 300) & 1) ? rgb(255, 230, 60) : rgb(255, 180, 0);
+  px(cx, 1, star); px(cx - 1, 2, star); px(cx, 2, star); px(cx + 1, 2, star); px(cx, 3, star);
+  static const uint8_t L[][3] = {{255, 40, 40}, {255, 200, 40}, {60, 120, 255}, {230, 230, 230}};
+  for (int i = 0; i < 16; i++) {
+    uint32_t h = hsh(i + 300);
+    int r = 3 + h % 16, tier = r < 6 ? r : (r < 12 ? r - 3 : r - 6);
+    int hw = 1 + tier * 2 / 3 + (r >= 12 ? 1 : 0);
+    int x = cx - hw + (int)((h >> 8) % (hw * 2 + 1));
+    if ((e / 400 + i) % 3) px(x, 3 + r, rgbk(L[i % 4], 1));
+  }
+}
+
+// US flag waving on a pole (Memorial, Labor, Veterans, Presidents Day).
+static void drawFlag(uint32_t e) {
+  const int FX = 21, FY = 4, FW = 26, FH = 14;
+  dma_display->fillRect(FX - 2, 2, 1, 21, rgb(150, 150, 150));
+  px(FX - 2, 1, rgb(220, 180, 60));
+  for (int x = 0; x < FW; x++) {
+    float ph = x * 0.35f - e / 180.0f;
+    int off = lroundf(1.5f * sinf(ph) * x / FW);
+    float shade = 0.75f + 0.25f * cosf(ph);
+    for (int y = 0; y < FH; y++) {
+      uint16_t c;
+      if (x < 11 && y < 8)  c = (x % 2 == 1 && y % 2 == 1) ? rgb(200 * shade, 200 * shade, 200 * shade)
+                                                           : rgb(20 * shade, 40 * shade, 150 * shade);
+      else if (y % 2 == 0)  c = rgb(200 * shade, 20 * shade, 30 * shade);
+      else                  c = rgb(160 * shade, 160 * shade, 160 * shade);
+      px(FX + x, FY + y + off, c);
+    }
+  }
+}
+
+// Twinkling stars (MLK Day, Juneteenth).
+static void drawStars(uint32_t e) {
+  for (int i = 0; i < 45; i++) {
+    uint32_t h = hsh(i * 7 + 3);
+    float tw = 0.5f + 0.5f * sinf(e / 300.0f * (1 + (h >> 16) % 3) + i);
+    int v = 30 + (int)(200 * tw * tw);
+    px(h % 64, (h >> 8) % 22, ((h >> 20) & 1) ? rgb(v, v * 0.8f, v * 0.3f) : rgb(v, v, v));
+  }
+}
+
+// Spring: flowers grow out of the grass and bloom one after another.
+static void drawFlowers(uint32_t e) {
+  static const uint8_t PET[][3] = {{255, 90, 170}, {180, 90, 255}, {255, 60, 60}, {255, 200, 40}, {90, 160, 255}};
+  drawGround(rgb(20, 110, 30));
+  for (int i = 0; i < 6; i++) {
+    uint32_t h = hsh(i + 91);
+    int x = 5 + i * 11 + h % 3, H = 7 + (h >> 4) % 8;
+    uint32_t t0 = 1500 + i * 250;
+    float grow = min(1.0f, (float)e / t0);
+    int top = 21 - (int)(H * grow);
+    dma_display->fillRect(x, top, 1, 21 - top, rgb(40, 170, 40));
+    if (grow > 0.5f) { px(x - 1, 21 - H / 2, rgb(60, 200, 60)); px(x + 1, 20 - H / 2, rgb(60, 200, 60)); }
+    if (e < t0) continue;
+    float bloom = min(1.0f, (e - t0) / 600.0f);
+    int hx = x + lroundf(sinf(e / 500.0f + i) * 0.8f);
+    uint16_t pc = rgbk(PET[i % 5], 0.4f + 0.6f * bloom);
+    if (bloom > 0.2f) { px(hx - 1, top, pc); px(hx + 1, top, pc); px(hx, top - 1, pc); px(hx, top + 1, pc); }
+    if (bloom > 0.7f) { px(hx - 1, top - 1, pc); px(hx + 1, top - 1, pc); px(hx - 1, top + 1, pc); px(hx + 1, top + 1, pc); }
+    px(hx, top, rgb(255, 220, 60));
+  }
+}
+
+// Summer: a big sun with slowly turning rays.
+static void drawSun(uint32_t e) {
+  const int cx = 32, cy = 11;
+  float rot = e / 1500.0f;
+  for (int k = 0; k < 12; k++) {
+    float a = rot + k * 0.5236f;
+    int len = (k % 2) ? 11 : 13;
+    uint16_t c = (k % 2) ? rgb(255, 140, 0) : rgb(255, 210, 40);
+    for (int r = 8; r <= len; r++) px(cx + lroundf(cosf(a) * r), cy + lroundf(sinf(a) * r), c);
+  }
+  dma_display->fillCircle(cx, cy, 6, rgb(255, 180, 0));
+  dma_display->fillCircle(cx - 1, cy - 1, 3, rgb(255, 225, 90));
+}
+
+// Winter: snowfall under a crescent moon, snow on the ground.
+static void drawSnowScene(uint32_t e) {
+  drawStars(e / 2);
+  dma_display->fillCircle(52, 6, 4, rgb(230, 230, 190));
+  dma_display->fillCircle(54, 5, 4, 0);
+  drawParticles(e, P_SNOW, 30);
+  drawGround(rgb(110, 110, 130));
+}
+
+// Easter egg: a dancing turtle (drawn at 2x) on a disco floor, with notes.
+static const char* const TURTLE[] = {   // 20 x 7, facing right
+  ".....SSSSSS....KKK..",
+  "...SSPPSSPPSS.KKK.K.",
+  "..SPPSSPPSSPPSKKKKK.",
+  ".SSSSSSSSSSSSSSKK...",
+  "KYYYYYYYYYYYYYY.....",
+};
+static void drawTurtle(uint32_t e) {
+  const uint32_t BEAT = 450;
+  uint32_t beat = e / BEAT;
+  float ph = (float)(e % BEAT) / BEAT;
+  static const uint8_t DISCO[][3] = {{255, 40, 120}, {40, 200, 255}, {255, 210, 40}, {120, 255, 90}};
+  for (int t = 0; t < 16; t++)
+    dma_display->fillRect(t * 4, 30, 4, 2, rgbk(DISCO[(t + beat) % 4], 0.55f));
+
+  bool spin = e > 6000 && e < 7000;                     // a quick spin mid-dance
+  bool left = spin ? ((e / 100) & 1) : ((beat / 4) & 1);
+  int hop = lroundf(fabsf(sinf(ph * 3.14159f)) * 3);
+  int cx = 32 + lroundf(9 * sinf(e / (BEAT * 8.0f) * 6.2832f));
+  int ox = cx - 20, oy = 16 - hop;
+  bool stepA = ph < 0.5f;
+  auto put = [&](int x, int y, uint16_t c) {           // 1x sprite coords -> 2x panel pixels
+    int sx = left ? 19 - x : x;
+    dma_display->fillRect(ox + sx * 2, oy + y * 2, 2, 2, c);
+  };
+  for (int y = 0; y < 5; y++)
+    for (int x = 0; x < 20; x++) {
+      char ch = TURTLE[y][x];
+      if (ch == '.') continue;
+      bool head = x >= 13 && y <= 3 && ch == 'K';
+      uint16_t c = ch == 'S' ? rgb(0, 130, 60) : ch == 'P' ? rgb(120, 200, 60)
+                 : ch == 'Y' ? rgb(200, 170, 60) : rgb(110, 210, 90);
+      put(x, y + ((head && (beat & 1)) ? 1 : 0), c);   // head bobs on every other beat
+    }
+  uint16_t skin = rgb(110, 210, 90);
+  int back = stepA ? 2 : 4, front = stepA ? 12 : 10;   // legs swap every half beat
+  for (int dx = 0; dx < 2; dx++) { put(back + dx, 5, skin); put(back + dx, 6, skin); put(front + dx, 5, skin); put(front + dx, 6, skin); }
+
+  static const uint8_t NOTE[7] = {0x0C, 0x0A, 0x09, 0x08, 0x38, 0x78, 0x30};   // eighth note, 7 px wide
+  for (int k = (int)(e / 700) - 3; k <= (int)(e / 700); k++) {
+    if (k < 0) continue;
+    uint32_t t = e - k * 700;
+    if (t > 2100) continue;
+    uint32_t h = hsh(k + 77);
+    int nx = cx - 12 + h % 24 + lroundf(sinf(t / 250.0f + k) * 2);
+    int ny = 10 - (int)(t * 0.012f);
+    bits7(nx, ny, NOTE, 7, rgbk(DISCO[h % 4], 1.0f - t / 2600.0f));
+  }
+}
+
+void drawOccasion(uint32_t e, uint8_t kind, const char* label) {
+  dma_display->clearScreen();
+  uint16_t lc = rgb(230, 230, 230);
+  switch (kind) {
+    case OCC_FIREWORKS:     drawFireworks(e, false); lc = rgb(255, 210, 80); break;
+    case OCC_FIREWORKS_USA: drawFireworks(e, true);  break;
+    case OCC_HEARTS:        drawParticles(e, P_HEART, 16); lc = rgb(255, 140, 180); break;
+    case OCC_SHAMROCKS:     drawParticles(e, P_SHAMROCK, 16); lc = rgb(120, 255, 120); break;
+    case OCC_EGGS:          drawEggs(e); lc = rgb(255, 230, 120); break;
+    case OCC_PUMPKIN:       drawPumpkin(e); lc = rgb(255, 140, 0); break;
+    case OCC_LEAVES:        drawParticles(e, P_LEAF, 18); lc = rgb(255, 170, 60); break;
+    case OCC_TREE:          drawTree(e); lc = rgb(255, 80, 80); break;
+    case OCC_FLAG:          drawFlag(e); break;
+    case OCC_STARS:         drawStars(e); lc = rgb(255, 220, 120); break;
+    case OCC_FLOWERS:       drawFlowers(e); lc = rgb(255, 150, 210); break;
+    case OCC_SUN:           drawSun(e); lc = rgb(255, 220, 60); break;
+    case OCC_SNOW:          drawSnowScene(e); lc = rgb(180, 220, 255); break;
+    case OCC_TURTLE:        drawTurtle(e); break;
+  }
+  drawLabel(e, label, lc);
   present();
 }
 

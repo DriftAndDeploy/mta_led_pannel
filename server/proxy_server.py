@@ -20,6 +20,7 @@ import csv
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -27,7 +28,7 @@ import secrets
 import threading
 import time
 import zlib
-from datetime import datetime, time as dtime, timedelta
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -741,6 +742,130 @@ def demo_selection(panel_id: str, slot: int) -> tuple[str, dict | None, str]:
     return lines[0], None, "N"
 
 
+# ── Holidays & seasons (full-panel animations) ────────────────────────────
+#
+# With Animations on, on these days the panel plays a 10 s full-screen
+# animation every 10 minutes. Numbers must match OCC_* in the firmware.
+OCC_KINDS = {"fireworks": 1, "fireworks_usa": 2, "hearts": 3, "shamrocks": 4, "eggs": 5,
+             "pumpkin": 6, "leaves": 7, "tree": 8, "flag": 9, "stars": 10, "flowers": 11,
+             "sun": 12, "snow": 13, "turtle": 14}
+OCCASION_PREVIEW_S = 20
+
+# Solstices/equinoxes: Meeus, Astronomical Algorithms ch. 27 (accurate to
+# about a minute for 1000-3000 AD), so the date is right even when the
+# moment falls near midnight.
+_EQ_MEAN = [  # March, June, September, December
+    (2451623.80984, 365242.37404,  0.05169, -0.00411, -0.00057),
+    (2451716.56767, 365241.62603,  0.00325,  0.00888, -0.00030),
+    (2451810.21715, 365242.01767, -0.11575,  0.00337,  0.00078),
+    (2451900.05952, 365242.74049, -0.06223, -0.00823,  0.00032),
+]
+_EQ_TERMS = [
+    (485, 324.96, 1934.136), (203, 337.23, 32964.467), (199, 342.08, 20.186),
+    (182, 27.85, 445267.112), (156, 73.14, 45036.886), (136, 171.52, 22518.443),
+    (77, 222.54, 65928.934), (74, 296.72, 3034.906), (70, 243.58, 9037.513),
+    (58, 119.81, 33718.147), (52, 297.17, 150.678), (50, 21.02, 2281.226),
+    (45, 247.54, 29929.562), (44, 325.15, 31555.956), (29, 60.93, 4443.417),
+    (18, 155.12, 67555.328), (17, 288.79, 4562.452), (16, 198.04, 62894.029),
+    (14, 199.76, 31436.921), (12, 95.39, 14577.848), (12, 287.11, 31931.756),
+    (12, 320.81, 34777.259), (9, 227.73, 1222.114), (8, 15.45, 16859.074),
+]
+
+
+_J2000 = datetime(2000, 1, 1, 12, tzinfo=timezone.utc)
+
+
+def season_start(year: int, i: int) -> datetime:
+    """Moment of the March equinox (0), June solstice (1), September
+    equinox (2) or December solstice (3), in Eastern time."""
+    y = (year - 2000) / 1000
+    a, b, c, d, e = _EQ_MEAN[i]
+    jde0 = a + b * y + c * y ** 2 + d * y ** 3 + e * y ** 4
+    t = (jde0 - 2451545.0) / 36525
+    w = math.radians(35999.373 * t - 2.47)
+    dl = 1 + 0.0334 * math.cos(w) + 0.0007 * math.cos(2 * w)
+    s = sum(A * math.cos(math.radians(B + C * t)) for A, B, C in _EQ_TERMS)
+    jde = jde0 + 0.00001 * s / dl
+    utc = _J2000 + timedelta(days=jde - 2451545.0, seconds=-69)
+    return utc.astimezone(EASTERN)
+
+
+def easter(year: int) -> date:
+    """Western Easter Sunday (anonymous Gregorian algorithm)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return date(year, month, day + 1)
+
+
+def nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """n-th weekday (Mon=0) of a month; n=-1 for the last one."""
+    if n > 0:
+        first = date(year, month, 1)
+        return first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
+    last = date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+    return last - timedelta(days=(last.weekday() - weekday) % 7)
+
+
+def occasions(year: int) -> dict:
+    """{date: (animation, label)} for a year. Holidays win over seasons."""
+    seasons = [("flowers", "SPRING EQUINOX"), ("sun", "SUMMER SOLSTICE"),
+               ("leaves", "FALL EQUINOX"), ("snow", "WINTER SOLSTICE")]
+    days = {season_start(year, i).date(): seasons[i] for i in range(4)}
+    days.update({
+        date(year, 1, 1):          ("fireworks", f"HAPPY {year}"),
+        nth_weekday(year, 1, 0, 3): ("stars", "MLK DAY"),
+        date(year, 2, 14):         ("hearts", "VALENTINE'S DAY"),
+        nth_weekday(year, 2, 0, 3): ("flag", "PRESIDENTS DAY"),
+        date(year, 3, 17):         ("shamrocks", "ST. PATRICK'S DAY"),
+        easter(year):              ("eggs", "HAPPY EASTER"),
+        nth_weekday(year, 5, 0, -1): ("flag", "MEMORIAL DAY"),
+        date(year, 6, 19):         ("stars", "JUNETEENTH"),
+        date(year, 7, 4):          ("fireworks_usa", "HAPPY 4TH OF JULY"),
+        nth_weekday(year, 9, 0, 1): ("flag", "LABOR DAY"),
+        date(year, 10, 31):        ("pumpkin", "HAPPY HALLOWEEN"),
+        date(year, 11, 11):        ("flag", "VETERANS DAY"),
+        nth_weekday(year, 11, 3, 4): ("leaves", "HAPPY THANKSGIVING"),
+        date(year, 12, 24):        ("tree", "CHRISTMAS EVE"),
+        date(year, 12, 25):        ("tree", "MERRY CHRISTMAS"),
+        date(year, 12, 31):        ("fireworks", "NEW YEAR'S EVE"),
+    })
+    return days
+
+
+def occasion_payload(panel_id: str, cfg: dict, now: datetime) -> dict:
+    """occasion / occasion_label / occasion_seq for /next-trains (0 = none).
+    A new seq makes the panel play right away; otherwise every 10 min."""
+    preview = cfg.get("preview_occasion") or {}
+    if preview.get("until", 0) > time.time():
+        return {"occasion": OCC_KINDS[preview["kind"]], "occasion_label": preview["label"],
+                "occasion_seq": preview["seq"]}
+    if cfg["animations"]:
+        today = now.date()
+        hit = occasions(today.year).get(today)
+        if hit:
+            kind, label = hit
+            return {"occasion": OCC_KINDS[kind], "occasion_label": label,
+                    "occasion_seq": int(today.strftime("%Y%m%d")) * 100 + OCC_KINDS[kind]}
+    return {"occasion": 0, "occasion_label": "", "occasion_seq": 0}
+
+
+def preview_list(year: int) -> list[tuple[str, str]]:
+    """One of each animation, in calendar order, for 'Preview a holiday'."""
+    seen, out = set(), []
+    for d, (kind, label) in sorted(occasions(year).items()):
+        if kind not in seen:
+            seen.add(kind)
+            out.append((kind, label))
+    return out
+
+
 def arriving_train(feed, stop_id: str, line: str, now: datetime) -> int:
     """Id of a train pulling into stop_id right now (0 = none).
 
@@ -860,6 +985,7 @@ def next_trains():
                                if cfg["animations"] else 0,
         })
         payload["error"] = payload["error"] or error2
+    payload.update(occasion_payload(panel_id, cfg, now))
     if wifi_new:
         payload["wifi_new"] = wifi_new
     return jsonify(payload)
@@ -920,6 +1046,38 @@ def api_preview_arrival():
         cfg = load_config(pid)
         cfg["preview_arrival"] = {"id": secrets.randbelow(2**31 - 1) + 1, "until": int(time.time()) + 30}
         save_config(pid, cfg)
+    return jsonify({"ok": True})
+
+
+def _set_occasion_preview(pid: str, kind: str, label: str) -> None:
+    with _config_lock:
+        cfg = load_config(pid)
+        cfg["preview_occasion"] = {"kind": kind, "label": label,
+                                   "seq": secrets.randbelow(2**31 - 1) + 1,
+                                   "until": int(time.time()) + OCCASION_PREVIEW_S}
+        save_config(pid, cfg)
+
+
+@app.post("/api/preview-occasion")
+def api_preview_occasion():
+    """Play the next holiday/season animation on the panel (cycles each call)."""
+    pid = require_panel_id()
+    options = preview_list(datetime.now(tz=EASTERN).year)
+    cfg = load_config(pid)
+    idx = (cfg.get("preview_occasion_idx", -1) + 1) % len(options)
+    kind, label = options[idx]
+    _set_occasion_preview(pid, kind, label)
+    with _config_lock:
+        cfg = load_config(pid)
+        cfg["preview_occasion_idx"] = idx
+        save_config(pid, cfg)
+    return jsonify({"ok": True, "label": label, "kind": kind})
+
+
+@app.post("/api/turtle")
+def api_turtle():
+    """Easter egg: a dancing turtle on the panel."""
+    _set_occasion_preview(require_panel_id(), "turtle", "")
     return jsonify({"ok": True})
 
 

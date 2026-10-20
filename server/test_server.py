@@ -422,6 +422,56 @@ class NightSchedule(unittest.TestCase):
         self.assertNotIn("night_skip_until", ps.CONFIG_SCHEMA)
 
 
+class Occasions(unittest.TestCase):
+    def test_season_dates_match_published_times(self):
+        # 2025: Mar 20 05:01 EDT, Jun 20 22:42 EDT, Sep 22 14:19 EDT, Dec 21 10:03 EST
+        got = [ps.season_start(2025, i).strftime("%m-%d %H:%M") for i in range(4)]
+        self.assertEqual(got, ["03-20 05:01", "06-20 22:42", "09-22 14:19", "12-21 10:03"])
+        # Sep 2026 equinox is 00:05 UTC on the 23rd, i.e. the 22nd in New York
+        self.assertEqual(ps.season_start(2026, 2).date(), ps.date(2026, 9, 22))
+
+    def test_floating_holidays(self):
+        self.assertEqual(ps.easter(2026), ps.date(2026, 4, 5))
+        self.assertEqual(ps.easter(2027), ps.date(2027, 3, 28))
+        occ = ps.occasions(2026)
+        self.assertEqual(occ[ps.date(2026, 11, 26)], ("leaves", "HAPPY THANKSGIVING"))
+        self.assertEqual(occ[ps.date(2026, 5, 25)], ("flag", "MEMORIAL DAY"))
+        self.assertEqual(occ[ps.date(2026, 9, 7)][1], "LABOR DAY")
+        self.assertEqual(occ[ps.date(2026, 1, 19)][1], "MLK DAY")
+        self.assertEqual(occ[ps.date(2026, 6, 21)][1], "SUMMER SOLSTICE")
+        self.assertEqual(occ[ps.date(2026, 1, 1)][1], "HAPPY 2026")
+        self.assertNotIn(ps.date(2026, 10, 20), occ)
+        for kind, label in occ.values():
+            self.assertIn(kind, ps.OCC_KINDS)
+            self.assertLessEqual(len(label), 23)   # firmware buffer
+
+    def test_payload_and_preview(self):
+        c = ps.app.test_client()
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)), \
+             mock.patch.object(ps, "datetime") as dt:
+            dt.now.return_value = datetime(2026, 10, 31, 12, 0, tzinfo=ET)
+            off = c.get("/next-trains?panel_id=OC0001").get_json()
+            c.post("/api/config?panel_id=OC0001", json={"animations": True})
+            on = c.get("/next-trains?panel_id=OC0001").get_json()
+            dt.now.return_value = datetime(2026, 10, 20, 12, 0, tzinfo=ET)
+            plain = c.get("/next-trains?panel_id=OC0001").get_json()
+            first = c.post("/api/preview-occasion?panel_id=OC0001").get_json()
+            prev = c.get("/next-trains?panel_id=OC0001").get_json()
+            second = c.post("/api/preview-occasion?panel_id=OC0001").get_json()
+            c.post("/api/turtle?panel_id=OC0001")
+            turtle = c.get("/next-trains?panel_id=OC0001").get_json()
+        self.assertEqual(off["occasion"], 0)
+        self.assertEqual((on["occasion"], on["occasion_label"]), (ps.OCC_KINDS["pumpkin"], "HAPPY HALLOWEEN"))
+        self.assertEqual(on["occasion_seq"], 2026103100 + ps.OCC_KINDS["pumpkin"])
+        self.assertEqual(plain["occasion"], 0)
+        self.assertEqual(first["label"], "HAPPY 2026")
+        self.assertEqual(prev["occasion"], ps.OCC_KINDS["fireworks"])
+        self.assertNotEqual(first["kind"], second["kind"])
+        self.assertEqual(turtle["occasion"], ps.OCC_KINDS["turtle"])
+        self.assertEqual(len(ps.preview_list(2026)), 13)   # every animation except the turtle
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

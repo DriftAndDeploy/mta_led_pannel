@@ -856,6 +856,30 @@
     color-scheme: dark;
     width: 100%;
   }
+  /* Easter egg */
+  .egg-row { display: flex; justify-content: center; padding-top: 18px; }
+  .egg-btn {
+    background: none; border: none; padding: 6px; cursor: pointer;
+    opacity: .16; transition: opacity .2s;
+  }
+  .egg-btn:active, .egg-btn:hover { opacity: .5; }
+  .egg-btn canvas { display: block; image-rendering: pixelated; }
+  .turtle-overlay {
+    display: none;
+    position: fixed; inset: 0; z-index: 300;
+    background: rgba(0,0,0,.97);
+    flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    cursor: pointer;
+  }
+  .turtle-overlay.open { display: flex; }
+  .turtle-overlay canvas {
+    width: min(92vw, 520px); aspect-ratio: 2 / 1;
+    border-radius: 10px; border: 1px solid #222; background: #08080a;
+  }
+  .turtle-caption {
+    font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 4px; color: #8ecbff;
+  }
+  .turtle-sub { font-size: 10px; letter-spacing: 1px; color: var(--muted); }
   .hint-link {
     background: none; border: none; padding: 0;
     font: inherit; letter-spacing: inherit;
@@ -1044,7 +1068,9 @@
     <div>
       <span class="toggle-label">Animations</span>
       <div class="toggle-hint">A little train pulls across the panel when one is arriving at your
-        station · saves instantly · <button class="hint-link" onclick="previewArrival()">Preview on panel</button></div>
+        station, plus holiday &amp; solstice/equinox shows every 10 min · saves instantly ·
+        <button class="hint-link" onclick="previewArrival()">Preview train</button> ·
+        <button class="hint-link" onclick="previewOccasion()">Preview a holiday</button></div>
     </div>
     <label class="toggle-switch">
       <input type="checkbox" id="toggle-animations" onchange="saveAnimations(this.checked)">
@@ -1182,7 +1208,18 @@
       </div>
       <div class="wifi-state" id="wifi-state"></div>
     </div>
+
+    <div class="egg-row">
+      <button class="egg-btn" onclick="danceTurtle()" aria-label="?"><canvas id="egg-turtle" width="40" height="14"></canvas></button>
+    </div>
   </div>
+</div>
+
+<!-- Easter egg -->
+<div class="turtle-overlay" id="turtle-overlay" onclick="closeTurtle()">
+  <canvas id="turtle-canvas" width="640" height="320"></canvas>
+  <div class="turtle-caption">TURTLE TIME</div>
+  <div class="turtle-sub">dancing on your panel too · tap to close</div>
 </div>
 
 <!-- Switch panel -->
@@ -1246,7 +1283,7 @@ let nightOff         = false;   // ...and the panel is actually dark for it
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1792,6 +1829,104 @@ async function previewArrival() {
   }
 }
 
+async function previewOccasion() {
+  try {
+    const r = await api('/api/preview-occasion', {});
+    showToast(`Showing “${r.label}” on the panel within 15 s · tap again for the next one`);
+  } catch (e) {
+    showToast('Could not reach the server — ' + e.message);
+  }
+}
+
+// ── Easter egg: dancing turtle (same sprite + moves as the panel's) ───────
+const TURTLE = [
+  '.....SSSSSS....KKK..',
+  '...SSPPSSPPSS.KKK.K.',
+  '..SPPSSPPSSPPSKKKKK.',
+  '.SSSSSSSSSSSSSSKK...',
+  'KYYYYYYYYYYYYYY.....',
+];
+const T_COLORS = { S: '#00823c', P: '#78c83c', Y: '#c8aa3c', K: '#6ed25a' };
+const DISCO = ['#ff2878', '#28c8ff', '#ffd228', '#78ff5a'];
+const NOTE = [0x0C, 0x0A, 0x09, 0x08, 0x38, 0x78, 0x30];
+let turtleRaf = null;
+
+function hsh(x) {
+  x = (x ^ (x >>> 16)) >>> 0; x = Math.imul(x, 0x7feb352d) >>> 0;
+  x = (x ^ (x >>> 15)) >>> 0; x = Math.imul(x, 0x846ca68b) >>> 0;
+  return (x ^ (x >>> 16)) >>> 0;
+}
+
+function turtleFrame(e) {   // -> 64x32 array of colours (null = off)
+  const fb = Array.from({ length: 32 }, () => Array(64).fill(null));
+  const px = (x, y, c) => { if (x >= 0 && x < 64 && y >= 0 && y < 32) fb[y][x] = c; };
+  const BEAT = 450, beat = Math.floor(e / BEAT), ph = (e % BEAT) / BEAT;
+  for (let t = 0; t < 16; t++) for (let x = 0; x < 4; x++) { px(t * 4 + x, 30, DISCO[(t + beat) % 4]); px(t * 4 + x, 31, DISCO[(t + beat) % 4]); }
+  const spin = e > 6000 && e < 7000;
+  const left = spin ? Math.floor(e / 100) % 2 === 1 : Math.floor(beat / 4) % 2 === 1;
+  const hop = Math.round(Math.abs(Math.sin(ph * Math.PI)) * 3);
+  const cx = 32 + Math.round(9 * Math.sin(e / (BEAT * 8) * 2 * Math.PI));
+  const ox = cx - 20, oy = 16 - hop;
+  const put = (x, y, c) => {
+    const sx = left ? 19 - x : x;
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) px(ox + sx * 2 + dx, oy + y * 2 + dy, c);
+  };
+  TURTLE.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch === '.') return;
+    const head = x >= 13 && y <= 3 && ch === 'K';
+    put(x, y + (head && beat % 2 ? 1 : 0), T_COLORS[ch]);
+  }));
+  const stepA = ph < 0.5, back = stepA ? 2 : 4, front = stepA ? 12 : 10;
+  for (let dx = 0; dx < 2; dx++) for (const y of [5, 6]) { put(back + dx, y, T_COLORS.K); put(front + dx, y, T_COLORS.K); }
+  for (let k = Math.floor(e / 700) - 3; k <= Math.floor(e / 700); k++) {
+    if (k < 0) continue;
+    const t = e - k * 700;
+    if (t > 2100) continue;
+    const h = hsh(k + 77);
+    const nx = cx - 12 + h % 24 + Math.round(Math.sin(t / 250 + k) * 2), ny = 10 - Math.floor(t * 0.012);
+    NOTE.forEach((bits, r) => { for (let b = 0; b < 7; b++) if (bits & (0x40 >> b)) px(nx + b, ny + r, DISCO[h % 4]); });
+  }
+  return fb;
+}
+
+function paintLeds(canvas, fb) {
+  const g = canvas.getContext('2d'), s = canvas.width / 64;
+  g.fillStyle = '#08080a'; g.fillRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < 32; y++) for (let x = 0; x < 64; x++) {
+    g.fillStyle = fb[y][x] || '#18181c';
+    g.beginPath(); g.arc(x * s + s / 2, y * s + s / 2, s * (fb[y][x] ? 0.42 : 0.3), 0, 2 * Math.PI); g.fill();
+  }
+}
+
+function danceTurtle() {
+  api('/api/turtle', {}).catch(() => {});   // the panel dances too
+  document.getElementById('turtle-overlay').classList.add('open');
+  const canvas = document.getElementById('turtle-canvas');
+  const start = performance.now();
+  const step = now => {
+    const e = now - start;
+    if (e > 10000) return closeTurtle();
+    paintLeds(canvas, turtleFrame(e));
+    turtleRaf = requestAnimationFrame(step);
+  };
+  cancelAnimationFrame(turtleRaf);
+  turtleRaf = requestAnimationFrame(step);
+}
+
+function closeTurtle() {
+  cancelAnimationFrame(turtleRaf);
+  document.getElementById('turtle-overlay').classList.remove('open');
+}
+
+function drawEggTurtle() {   // the tiny, barely-visible turtle in Settings
+  const g = document.getElementById('egg-turtle').getContext('2d');
+  TURTLE.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch !== '.') { g.fillStyle = T_COLORS[ch]; g.fillRect(x * 2, y * 2, 2, 2); }
+  }));
+  g.fillStyle = T_COLORS.K;
+  [2, 3, 12, 13].forEach(x => g.fillRect(x * 2, 10, 2, 4));
+}
+
 async function saveDemo(on) {
   document.getElementById('demo-banner').classList.toggle('show', on);
   if (!await patchConfig({ demo: on }, on ? 'Demo mode on' : 'Demo mode off')) {
@@ -2005,6 +2140,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 buildSwatches();
+drawEggTurtle();
 enableSwipeToClose('settings-modal', () => closeSettings());
 enableSwipeToClose('panel-switch-modal', () => closePanelSwitchModal());
 init();
