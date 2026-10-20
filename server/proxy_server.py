@@ -26,6 +26,7 @@ import re
 import secrets
 import threading
 import time
+import zlib
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -60,6 +61,8 @@ WEATHER_RETRY_S   = 120    # after a failed fetch, wait this long before retryin
 UMBRELLA_HOURS    = 12     # look this far ahead for rain
 UMBRELLA_CHANCE   = 50     # % chance of rain in any of those hours -> umbrella
 NYC_CENTER        = (40.7128, -74.0060)
+
+ARRIVING_WINDOW_S = 60     # a train due within this many seconds is "arriving"
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -116,6 +119,7 @@ DEFAULT_CONFIG = {
     "auto_update":   True,
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
     "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
+    "animations":    False,  # train pulls across the panel when one is arriving
     # Two-train mode: a second line/station shown as a second row.
     "dual":          False,
     "line2":         "L",
@@ -258,6 +262,7 @@ CONFIG_SCHEMA = {
     "auto_update":   _bool,
     "latch_blanking": _int_range(1, 8),
     "show_weather":  _bool,
+    "animations":    _bool,
     "dual":          _bool,
     "line2":         _choice(set(LINES)),
     "stop_parent2":  _text(8, r"[A-Z0-9]{1,8}"),
@@ -612,6 +617,34 @@ def demo_selection(panel_id: str, slot: int) -> tuple[str, dict | None, str]:
     return lines[0], None, "N"
 
 
+def arriving_train(feed, stop_id: str, line: str, now: datetime) -> int:
+    """Id of a train pulling into stop_id right now (0 = none).
+
+    The id is stable for a given trip, so the panel animates each train once
+    even though it polls several times while the train is in the window.
+    """
+    for trip in feed.filter_trips(line_id=line):
+        for update in trip.stop_time_updates:
+            if update.stop_id != stop_id:
+                continue
+            t = update.arrival or update.departure
+            if t is not None:
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=EASTERN)
+                if -15 <= (t - now).total_seconds() <= ARRIVING_WINDOW_S:
+                    key = getattr(trip, "trip_id", None) or t.isoformat()
+                    return (zlib.crc32(key.encode()) & 0x7FFFFFFF) or 1
+            break
+    return 0
+
+
+def arrival_id(panel_id: str, line: str, stop_id: str, now: datetime) -> int:
+    try:
+        return arriving_train(get_feed(line), stop_id, line, now)
+    except Exception:
+        return 0   # feed problems are already logged by train_times()
+
+
 def fmt_time(dt: datetime) -> str:
     return dt.strftime("%I:%M").lstrip("0")
 
@@ -678,7 +711,14 @@ def next_trains():
         "wx_umbrella":    1 if wx and wx["umbrella"] else 0,
         # seconds of diagnostic test pattern left (0 = normal display)
         "test_pattern":   max(0, int(cfg.get("test_until", 0) - time.time())),
+        # nonzero = play the arriving-train animation once for this id
+        "arriving":       0,
     }
+    if cfg["animations"]:
+        payload["arriving"] = arrival_id(panel_id, line, stop_parent + platform, now)
+    preview = cfg.get("preview_arrival") or {}
+    if preview.get("until", 0) > time.time():
+        payload["arriving"] = preview["id"]
     # Two-train mode (demo always shows a single train).
     payload["dual"] = 0
     if cfg["dual"] and not cfg["demo"]:
@@ -692,6 +732,8 @@ def next_trains():
             "line2":           line2,
             "logo2_r": r2, "logo2_g": g2, "logo2_b": b2,
             "service_status2": alert_for_line(line2, now.timestamp())[1],
+            "arriving2":       arrival_id(panel_id, line2, cfg["stop_parent2"] + cfg["platform2"], now)
+                               if cfg["animations"] else 0,
         })
         payload["error"] = payload["error"] or error2
     if wifi_new:
@@ -744,6 +786,17 @@ def api_weather():
     if not wx:
         return jsonify({"ok": False})
     return jsonify({"ok": True, "station": cfg["stop_name"], **wx})
+
+
+@app.post("/api/preview-arrival")
+def api_preview_arrival():
+    """Play the arriving-train animation on the panel once (next poll)."""
+    pid = require_panel_id()
+    with _config_lock:
+        cfg = load_config(pid)
+        cfg["preview_arrival"] = {"id": secrets.randbelow(2**31 - 1) + 1, "until": int(time.time()) + 30}
+        save_config(pid, cfg)
+    return jsonify({"ok": True})
 
 
 @app.get("/api/status")

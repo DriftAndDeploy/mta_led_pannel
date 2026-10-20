@@ -139,8 +139,9 @@ protects against crashes, not against firmware that runs but misbehaves.
 
 ## What the panel shows
 
-- **Normal:** next catchable train time (top), line bullet + scrolling
-  "Leave by" (white) and service alert (yellow) along the bottom.
+- **Normal:** next catchable train time (top), line bullet + scrolling text
+  along the bottom in this order: "Leave by" (white), weather, service alert
+  (yellow) — each only if it's turned on (and, for alerts, if there is one).
 - **Minimalist:** bullet + time centred, with a 2×2 status dot in the top-left
   corner (green normal, yellow alerts/changes, red suspended).
 - **Weather** (optional, **Display Options → Show Weather**): icon + temperature
@@ -149,6 +150,10 @@ protects against crashes, not against firmware that runs but misbehaves.
   shows it beside the bullet, or at the front of the scrolling text; minimalist
   mode shows it centred under the time. Data from Open-Meteo (free, no key),
   refreshed every 15 min; if it can't be reached the panel just hides it.
+- **Animations** (**Display Options → Animations**): when a train is due at your
+  station within a minute, the panel shows the bullet + "ARRIVING" and a little
+  two-car train in the line's colour pulls in, stops and leaves (~4 s), once per
+  train — for both trains in two-train mode. **Preview on panel** plays it now.
 - **Two Trains** (**Display Options → Two Trains**): two rows, each a bullet
   and a big arrival time, right-aligned so the colons line up. A yellow/red dot
   after a time means delays/suspension on that line. Pick the second train with

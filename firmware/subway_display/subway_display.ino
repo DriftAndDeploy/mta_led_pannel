@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "6.6.0"
-#define FW_BUILD   660
+#define FW_VERSION "6.7.0"
+#define FW_BUILD   670
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -58,6 +58,7 @@ const uint32_t STALE_MS          = 180000;  // show --:-- if data older than thi
 const uint32_t OFFLINE_REBOOT_MS = 300000;  // reboot if WiFi is gone this long
 const uint32_t FRAME_MS          = 40;      // render rate; one scroll px per frame
 const uint32_t ID_SPLASH_MS      = 15000;   // Panel ID screen on power-up
+const uint32_t ARRIVAL_ANIM_MS   = 4300;    // arriving-train animation length
 const uint32_t HTTP_TIMEOUT_MS   = 8000;
 
 // Panel driving. latch_blanking hides the "ghost" glow / faint lines that
@@ -92,6 +93,8 @@ struct PanelState {
   char     line2[4]       = "L";
   uint8_t  logo2_r = 167, logo2_g = 169, logo2_b = 172;
   uint8_t  service_status2 = 0;
+  uint32_t arriving       = 0;      // nonzero: train 1 pulling in (play animation once per id)
+  uint32_t arriving2      = 0;      // same for train 2
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
   bool     panel_off      = false;
@@ -153,6 +156,7 @@ void drawMinimalist(const PanelState& s);
 void drawLogoAt(int cx, int cy, const PanelState& s);
 void drawBullet(int cx, int cy, int r, const char* l, uint8_t cr, uint8_t cg, uint8_t cb);
 void drawDual(const PanelState& s);
+void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8_t b);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -592,6 +596,8 @@ bool fetchTrainTimes() {
   n.logo2_g        = doc["logo2_g"] | 169;
   n.logo2_b        = doc["logo2_b"] | 172;
   n.service_status2 = doc["service_status2"] | 0;
+  n.arriving       = doc["arriving"]  | 0u;
+  n.arriving2      = doc["arriving2"] | 0u;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
   n.panel_off      = (doc["panel_off"]  | 0) != 0;
@@ -710,6 +716,27 @@ void render(const PanelState& in) {
     return;
   }
 
+  // Arriving-train animation: once per train id, only on fresh data.
+  static uint32_t played1 = 0, played2 = 0, anim_start = 0;
+  static uint8_t  anim_train = 0;   // 0 none, 1 = train 1, 2 = train 2
+  bool fresh = millis() - s.updated_ms < 30000;
+  if (!anim_train && fresh) {
+    if (s.arriving && s.arriving != played1) {
+      played1 = s.arriving; anim_train = 1; anim_start = millis();
+    } else if (s.dual && s.arriving2 && s.arriving2 != played2) {
+      played2 = s.arriving2; anim_train = 2; anim_start = millis();
+    }
+  }
+  if (anim_train) {
+    uint32_t e = millis() - anim_start;
+    if (e < ARRIVAL_ANIM_MS) {
+      if (anim_train == 1) drawArrival(e, s.line,  s.logo_r,  s.logo_g,  s.logo_b);
+      else                 drawArrival(e, s.line2, s.logo2_r, s.logo2_g, s.logo2_b);
+      return;
+    }
+    anim_train = 0;
+  }
+
   // Rebuild the ticker text only when new data arrives.
   if (s.version != scroll_version) {
     bool hasLeave = s.show_leave_by && s.leave_by[0] && strcmp(s.leave_by, "--:--") != 0;
@@ -722,7 +749,7 @@ void render(const PanelState& in) {
     // Only restart the scroll if the text itself changed.
     static char last_text[160] = "";
     char text[160];
-    snprintf(text, sizeof(text), "%s%s%s", wx_part, leave_part, alert_part);
+    snprintf(text, sizeof(text), "%s%s%s", leave_part, wx_part, alert_part);
     if (strcmp(text, last_text) != 0) {
       copyStr(last_text, sizeof(last_text), text);
       scroll_x = PANEL_RES_X;
@@ -756,10 +783,11 @@ void drawNormal(const PanelState& s) {
 
   dma_display->setTextSize(1);
   if (scrolling) {
+    // Order: leave by (white), weather, service alert (yellow).
     int cx = scroll_x;
+    cx = drawRun(leave_part, cx, TEXT_Y, dma_display->color565(255, 255, 255));
     if (weather) cx = drawRun(wx_part, cx, TEXT_Y, WX_TEXT_COLOR) + WX_GAP;
-    cx = drawRun(leave_part, cx, TEXT_Y, dma_display->color565(255, 255, 255));  // leave by: white
-    cx = drawRun(alert_part, cx, TEXT_Y, dma_display->color565(255, 220, 0));    // alert: yellow
+    cx = drawRun(alert_part, cx, TEXT_Y, dma_display->color565(255, 220, 0));
     // Clip: blank the logo column so glyphs slide smoothly under its edge.
     dma_display->fillRect(0, 16, SCROLL_MIN, 16, 0);
 
@@ -862,6 +890,77 @@ void drawDual(const PanelState& s) {
   uint16_t tc = dma_display->color565(s.time_r, s.time_g, s.time_b);
   drawTrainRow(1,  s.line,  s.logo_r,  s.logo_g,  s.logo_b,  s.train_time,  s.service_status,  tc);
   drawTrainRow(17, s.line2, s.logo2_r, s.logo2_g, s.logo2_b, s.train_time2, s.service_status2, tc);
+}
+
+// ---------------------------------------------------------------------------
+// Arriving-train animation (~4.3 s): bullet + "ARRIVING" on top, and a
+// two-car train in the line's colour that eases in from the right, stops,
+// and pulls out to the left. Sprite legend:
+//   r roof  s body  w lit window  c line-colour stripe  u underframe
+//   k wheel  h headlight  t tail light
+// ---------------------------------------------------------------------------
+static const char* const TRAIN_SPRITE[] = {
+  "..rrrrrrrrrrrrrrrrrrrr.....rrrrrrrrrrrrrrrrrrrr..",
+  ".ssssssssssssssssssssss...ssssssssssssssssssssss.",
+  ".sswwwwssswwwwssswwwwss...sswwwwssswwwwssswwwwss.",
+  ".sswwwwssswwwwssswwwwss...sswwwwssswwwwssswwwwss.",
+  ".sswwwwssswwwwssswwwwss...sswwwwssswwwwssswwwwss.",
+  ".ssssssssssssssssssssss...ssssssssssssssssssssss.",
+  ".cccccccccccccccccccccc...cccccccccccccccccccccc.",
+  ".hsssssssssssssssssssss...ssssssssssssssssssssst.",
+  ".hsssssssssssssssssssssuuussssssssssssssssssssss.",
+  ".uuuuuuuuuuuuuuuuuuuuuu...uuuuuuuuuuuuuuuuuuuuuu.",
+  "...kk..kk.......kk..kk.......kk..kk.......kk..kk.",
+  "...kk..kk.......kk..kk.......kk..kk.......kk..kk.",
+};
+static const int TRAIN_W = 49, TRAIN_H = 12, TRAIN_Y = 18;
+static const uint32_t ANIM_IN_MS = 1500, ANIM_STOP_MS = 1300, ANIM_OUT_MS = 1500;
+static const int TRAIN_STOP_X = (PANEL_RES_X - TRAIN_W) / 2;
+
+static void drawTrainSprite(int x0, uint16_t stripe) {
+  uint16_t pal[128] = {0};
+  pal['r'] = dma_display->color565( 80,  80,  92);
+  pal['s'] = dma_display->color565(120, 120, 135);
+  pal['w'] = dma_display->color565(190, 160,  80);
+  pal['c'] = stripe;
+  pal['u'] = dma_display->color565( 45,  45,  50);
+  pal['k'] = dma_display->color565( 90,  90,  90);
+  pal['h'] = dma_display->color565(255, 255, 200);
+  pal['t'] = dma_display->color565(220,   0,   0);
+  for (int row = 0; row < TRAIN_H; row++) {
+    const char* line = TRAIN_SPRITE[row];
+    for (int col = 0; col < TRAIN_W; col++) {
+      int x = x0 + col;
+      if (x < 0 || x >= PANEL_RES_X || line[col] == '.') continue;
+      dma_display->drawPixel(x, TRAIN_Y + row, pal[(uint8_t)line[col] & 127]);
+    }
+  }
+}
+
+void drawArrival(uint32_t e, const char* line, uint8_t r, uint8_t g, uint8_t b) {
+  int x;
+  if (e < ANIM_IN_MS) {                                  // ease in, slowing to a stop
+    float t = 1.0f - (float)e / ANIM_IN_MS;
+    x = TRAIN_STOP_X + (int)((PANEL_RES_X - TRAIN_STOP_X) * t * t);
+  } else if (e < ANIM_IN_MS + ANIM_STOP_MS) {            // stopped at the platform
+    x = TRAIN_STOP_X;
+  } else {                                               // ease out, speeding up
+    float t = (float)(e - ANIM_IN_MS - ANIM_STOP_MS) / ANIM_OUT_MS;
+    x = TRAIN_STOP_X - (int)((TRAIN_STOP_X + TRAIN_W) * t * t);
+  }
+
+  dma_display->clearScreen();
+  drawBullet(7, 7, 6, line, r, g, b);
+  dma_display->setTextSize(1);
+  dma_display->setTextColor(dma_display->color565(220, 220, 220));
+  dma_display->setCursor(16, 4);
+  dma_display->print("ARRIVING");
+
+  dma_display->fillRect(0, 30, PANEL_RES_X, 1, dma_display->color565(55, 55, 60));     // rail
+  for (int sx = 1; sx < PANEL_RES_X; sx += 4)                                           // sleepers
+    dma_display->drawPixel(sx, 31, dma_display->color565(50, 35, 20));
+  drawTrainSprite(x, dma_display->color565((uint8_t)(r * 0.9f), (uint8_t)(g * 0.9f), (uint8_t)(b * 0.9f)));
+  present();
 }
 
 void drawStatusDot(uint8_t status) {

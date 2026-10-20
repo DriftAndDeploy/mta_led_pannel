@@ -310,6 +310,41 @@ class TwoTrains(unittest.TestCase):
         self.assertEqual(len(r.get_json()["errors"]), 2)
 
 
+class Animations(unittest.TestCase):
+    def _feed(self, t, trip_id="T1"):
+        trips = [SimpleNamespace(trip_id=trip_id, stop_time_updates=[
+            SimpleNamespace(stop_id="L14N", arrival=t.replace(tzinfo=None), departure=None)])]
+        return SimpleNamespace(filter_trips=lambda line_id: trips)
+
+    def test_arriving_window_and_stable_id(self):
+        now = at(10, 10)
+        a = ps.arriving_train(self._feed(at(10, 10).replace(second=40)), "L14N", "L", now)
+        b = ps.arriving_train(self._feed(at(10, 11)), "L14N", "L", now)         # prediction moved
+        self.assertTrue(a)
+        self.assertEqual(a, b)                                                  # same trip, same id
+        self.assertEqual(ps.arriving_train(self._feed(at(10, 12)), "L14N", "L", now), 0)   # 2 min out
+        self.assertEqual(ps.arriving_train(self._feed(at(10, 9)), "L14N", "L", now), 0)    # long gone
+        self.assertNotEqual(a, ps.arriving_train(self._feed(at(10, 11), "T2"), "L14N", "L", now))
+
+    def test_payload_respects_toggle_and_preview(self):
+        c = ps.app.test_client()
+        feed = self._feed(at(10, 10).replace(second=30))
+        with mock.patch.object(ps, "get_feed", return_value=feed), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)), \
+             mock.patch.object(ps, "datetime") as dt:
+            dt.now.return_value = at(10, 10)
+            off = c.get("/next-trains?panel_id=AN0001").get_json()["arriving"]
+            self.assertEqual(c.post("/api/preview-arrival?panel_id=AN0001").status_code, 200)
+            preview = c.get("/next-trains?panel_id=AN0001").get_json()["arriving"]
+            c.post("/api/config?panel_id=AN0001", json={"animations": True, "preview_arrival": None})
+            ps.save_config("AN0001", {**ps.load_config("AN0001"), "preview_arrival": None})
+            on = c.get("/next-trains?panel_id=AN0001").get_json()["arriving"]
+        self.assertEqual(off, 0)
+        self.assertTrue(preview)
+        self.assertTrue(on)
+        self.assertNotIn("preview_arrival", ps.CONFIG_SCHEMA)
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

@@ -813,6 +813,11 @@
   .tab-num  { font-family: 'Bebas Neue', sans-serif; font-size: 14px; letter-spacing: 2px; }
   .tab-sub  { font-size: 10px; letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .train-tag { color: #8ecbff; opacity: .75; }
+  .hint-link {
+    background: none; border: none; padding: 0;
+    font: inherit; letter-spacing: inherit;
+    color: #8ecbff; text-decoration: underline; cursor: pointer;
+  }
 
   /* Panel WiFi */
   .wifi-now {
@@ -994,6 +999,17 @@
   </div>
   <div class="toggle-row">
     <div>
+      <span class="toggle-label">Animations</span>
+      <div class="toggle-hint">A little train pulls across the panel when one is arriving at your
+        station · saves instantly · <button class="hint-link" onclick="previewArrival()">Preview on panel</button></div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-animations" onchange="saveAnimations(this.checked)">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="toggle-row">
+    <div>
       <span class="toggle-label">Minimalist Mode</span>
       <div class="toggle-hint">Logo + time centered · status dot · no scroll text</div>
     </div>
@@ -1169,7 +1185,7 @@ let stationsReq      = 0;
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1413,6 +1429,7 @@ async function init() {
   document.getElementById('toggle-demo').checked       = !!cfg.demo;
   document.getElementById('toggle-weather').checked    = !!cfg.show_weather;
   document.getElementById('toggle-dual').checked       = dualOn;
+  document.getElementById('toggle-animations').checked = !!cfg.animations;
   refreshWeatherHint();
   document.getElementById('demo-banner').classList.toggle('show', !!cfg.demo);
   updateMinimalistUI();
@@ -1621,6 +1638,21 @@ async function refreshWeatherHint() {
         (w.umbrella ? `☂ bring an umbrella (${w.rain_chance}% rain)` : `no umbrella needed (${w.rain_chance}% rain)`);
   } catch (e) {
     hint.textContent = WEATHER_HINT;
+  }
+}
+
+async function saveAnimations(on) {
+  if (!await patchConfig({ animations: on }, on ? 'Animations on' : 'Animations off')) {
+    document.getElementById('toggle-animations').checked = !on;
+  }
+}
+
+async function previewArrival() {
+  try {
+    await api('/api/preview-arrival', {});
+    showToast('Watch the panel — the train shows within 15 s');
+  } catch (e) {
+    showToast('Could not reach the server — ' + e.message);
   }
 }
 
