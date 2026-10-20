@@ -27,7 +27,7 @@ import secrets
 import threading
 import time
 import zlib
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -120,6 +120,9 @@ DEFAULT_CONFIG = {
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
     "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
     "animations":    False,  # train pulls across the panel when one is arriving
+    "night_mode":    False,  # panel off overnight
+    "night_start":   "01:00",
+    "night_end":     "06:00",
     # Two-train mode: a second line/station shown as a second row.
     "dual":          False,
     "line2":         "L",
@@ -263,6 +266,9 @@ CONFIG_SCHEMA = {
     "latch_blanking": _int_range(1, 8),
     "show_weather":  _bool,
     "animations":    _bool,
+    "night_mode":    _bool,
+    "night_start":   _text(5, r"(?:[01]\d|2[0-3]):[0-5]\d"),
+    "night_end":     _text(5, r"(?:[01]\d|2[0-3]):[0-5]\d"),
     "dual":          _bool,
     "line2":         _choice(set(LINES)),
     "stop_parent2":  _text(8, r"[A-Z0-9]{1,8}"),
@@ -319,6 +325,42 @@ def panel_status(panel_id: str) -> dict:
 # network name is kept, as "wifi_delivered".
 
 WIFI_KEYS = ("wifi_pending", "wifi_delivered")
+
+
+# ── Night schedule ────────────────────────────────────────────────────────
+#
+# Between night_start and night_end (Eastern; may cross midnight) the panel
+# is sent panel_off=1. Tapping power in the web app during the window sets
+# night_skip_until = the window's end, so the panel stays on until morning
+# and the schedule resumes the next night.
+
+def _hhmm(v: str) -> dtime:
+    h, m = v.split(":")
+    return dtime(int(h), int(m))
+
+
+def night_window(cfg: dict, now: datetime) -> datetime | None:
+    """End of the night window if `now` is inside it, else None."""
+    if not cfg.get("night_mode"):
+        return None
+    start, end = _hhmm(cfg["night_start"]), _hhmm(cfg["night_end"])
+    t = now.time().replace(second=0, microsecond=0)
+    if start == end:
+        return None
+    inside = start <= t < end if start < end else (t >= start or t < end)
+    if not inside:
+        return None
+    end_dt = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+    return end_dt if end_dt > now else end_dt + timedelta(days=1)
+
+
+def night_off(cfg: dict, now: datetime) -> bool:
+    end = night_window(cfg, now)
+    return end is not None and cfg.get("night_skip_until", 0) < now.timestamp()
+
+
+def clock_label(t: datetime | dtime) -> str:
+    return t.strftime("%I:%M %p").lstrip("0")
 
 
 def public_config(cfg: dict) -> dict:
@@ -782,7 +824,7 @@ def next_trains():
         "minimalist":     1 if cfg["minimalist"] else 0,
         "brightness":     cfg["brightness"],
         "latch_blanking": cfg["latch_blanking"],
-        "panel_off":      1 if cfg["panel_off"] else 0,
+        "panel_off":      1 if cfg["panel_off"] or night_off(cfg, now) else 0,
         "time_r": cfg["time_r"], "time_g": cfg["time_g"], "time_b": cfg["time_b"],
         "fw_build":       fw["build"] if fw else 0,
         "error":          error,
@@ -881,11 +923,31 @@ def api_preview_arrival():
     return jsonify({"ok": True})
 
 
+@app.post("/api/night-skip")
+def api_night_skip():
+    """{"skip": true}: keep the panel on until tonight's window ends.
+    {"skip": false}: go back to the schedule (panel off now if in the window)."""
+    pid = require_panel_id()
+    skip = (request.get_json(silent=True) or {}).get("skip", True) is True
+    with _config_lock:
+        cfg = load_config(pid)
+        end = night_window(cfg, datetime.now(tz=EASTERN))
+        cfg["night_skip_until"] = int(end.timestamp()) if skip and end else 0
+        save_config(pid, cfg)
+    return jsonify({"ok": True, "until": clock_label(end) if skip and end else None})
+
+
 @app.get("/api/status")
 def api_status():
     pid = require_panel_id()
     fw = firmware_info()
-    return jsonify({**panel_status(pid), "latest_fw_build": fw["build"] if fw else None})
+    cfg = load_config(pid)
+    now = datetime.now(tz=EASTERN)
+    end = night_window(cfg, now)
+    return jsonify({**panel_status(pid), "latest_fw_build": fw["build"] if fw else None,
+                    "night_active": end is not None,          # inside tonight's window
+                    "night_off": night_off(cfg, now),         # ...and not skipped
+                    "night_until": clock_label(end) if end else None})
 
 
 @app.route("/api/wifi", methods=["GET", "POST", "DELETE"])

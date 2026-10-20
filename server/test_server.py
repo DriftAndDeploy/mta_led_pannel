@@ -380,6 +380,48 @@ class Animations(unittest.TestCase):
         self.assertNotIn("preview_arrival", ps.CONFIG_SCHEMA)
 
 
+class NightSchedule(unittest.TestCase):
+    def cfg(self, start="01:00", end="06:00", **kw):
+        return {**ps.DEFAULT_CONFIG, "night_mode": True, "night_start": start, "night_end": end, **kw}
+
+    def test_window(self):
+        c = self.cfg()
+        self.assertFalse(ps.night_off(c, at(0, 59)))
+        self.assertTrue(ps.night_off(c, at(1, 0)))
+        self.assertTrue(ps.night_off(c, at(5, 59)))
+        self.assertFalse(ps.night_off(c, at(6, 0)))
+        self.assertFalse(ps.night_off({**c, "night_mode": False}, at(3, 0)))
+        self.assertEqual(ps.night_window(c, at(3, 0)), at(6, 0))
+
+    def test_window_across_midnight(self):
+        c = self.cfg("22:30", "06:00")
+        self.assertTrue(ps.night_off(c, at(23, 0)))
+        self.assertTrue(ps.night_off(c, at(2, 0)))
+        self.assertFalse(ps.night_off(c, at(12, 0)))
+        self.assertEqual(ps.night_window(c, at(23, 0)).day, at(23, 0).day + 1)   # ends tomorrow 6:00
+
+    def test_payload_skip_and_validation(self):
+        c = ps.app.test_client()
+        self.assertEqual(c.post("/api/config?panel_id=NT0001", json={"night_start": "25:00"}).status_code, 400)
+        c.post("/api/config?panel_id=NT0001", json={"night_mode": True})
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)), \
+             mock.patch.object(ps, "datetime") as dt:
+            dt.now.return_value = at(2, 30)
+            dark = c.get("/next-trains?panel_id=NT0001").get_json()["panel_off"]
+            status = c.get("/api/status?panel_id=NT0001").get_json()
+            skip = c.post("/api/night-skip?panel_id=NT0001", json={"skip": True}).get_json()
+            lit = c.get("/next-trains?panel_id=NT0001").get_json()["panel_off"]
+            c.post("/api/night-skip?panel_id=NT0001", json={"skip": False})
+            dark_again = c.get("/next-trains?panel_id=NT0001").get_json()["panel_off"]
+            dt.now.return_value = at(9, 0)
+            day = c.get("/next-trains?panel_id=NT0001").get_json()["panel_off"]
+        self.assertEqual((dark, lit, dark_again, day), (1, 0, 1, 0))
+        self.assertEqual((status["night_off"], status["night_until"]), (True, "6:00 AM"))
+        self.assertEqual(skip["until"], "6:00 AM")
+        self.assertNotIn("night_skip_until", ps.CONFIG_SCHEMA)
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

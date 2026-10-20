@@ -154,6 +154,11 @@ protects against crashes, not against firmware that runs but misbehaves.
   station within a minute, the panel shows the bullet + "ARRIVING" and a little
   two-car train in the line's colour pulls in, stops and leaves (~4 s), once per
   train — for both trains in two-train mode. **Preview on panel** plays it now.
+- **Night Schedule** (**Display Options → Night Schedule**): the panel goes dark
+  between the **Off at** and **On at** times (default 1:00–6:00 AM, NYC time;
+  can cross midnight). Tapping the power button during that window turns it
+  back on until the window ends; the schedule resumes the next night. The power
+  button shows blue while the panel is asleep on schedule.
 - **Two Trains** (**Display Options → Two Trains**): two rows, each a bullet
   and a big arrival time, right-aligned so the colons line up. A yellow/red dot
   after a time means delays/suspension on that line. Pick the second train with

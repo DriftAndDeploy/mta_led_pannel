@@ -75,6 +75,7 @@
   .power-btn:active   { background: #222; }
   .power-btn.on       { border-color: #4f4; color: #4f4; }
   .power-btn.off      { border-color: #f44; color: #f44; background: rgba(255,60,60,.08); }
+  .power-btn.night    { border-color: #8ecbff; color: #8ecbff; background: rgba(142,203,255,.08); }
 
   /* Brightness slider */
   .brightness-wrap {
@@ -829,6 +830,32 @@
   .tab-num  { font-family: 'Bebas Neue', sans-serif; font-size: 14px; letter-spacing: 2px; }
   .tab-sub  { font-size: 10px; letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .train-tag { color: #8ecbff; opacity: .75; }
+  .night-times {
+    display: none;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  .night-times.show { display: flex; }
+  .night-times label {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--muted);
+  }
+  .night-times input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 15px;
+    padding: 9px 10px;
+    color-scheme: dark;
+    width: 100%;
+  }
   .hint-link {
     background: none; border: none; padding: 0;
     font: inherit; letter-spacing: inherit;
@@ -1026,6 +1053,20 @@
   </div>
   <div class="toggle-row">
     <div>
+      <span class="toggle-label">Night Schedule</span>
+      <div class="toggle-hint" id="night-hint">Panel turns off overnight · saves instantly</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-night" onchange="saveNight(this.checked)">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="night-times" id="night-times">
+    <label>OFF AT<input type="time" id="night-start" value="01:00" onchange="saveNightTimes()"></label>
+    <label>ON AT<input type="time" id="night-end" value="06:00" onchange="saveNightTimes()"></label>
+  </div>
+  <div class="toggle-row">
+    <div>
       <span class="toggle-label">Minimalist Mode</span>
       <div class="toggle-hint">Logo + time centered · status dot · no scroll text</div>
     </div>
@@ -1199,11 +1240,13 @@ let dualOn           = false;
 let activeTrain      = 0;          // which train sections 01-03 / 05 are editing
 let trains           = [null, null];   // {line, station, platform, walk}
 let stationsReq      = 0;
+let nightActive      = false;   // inside tonight's off window (from /api/status)
+let nightOff         = false;   // ...and the panel is actually dark for it
 
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1293,8 +1336,13 @@ async function refreshStatus() {
       text = `Offline · seen ${ago(s.last_seen_s)}`;
       dot.className = 'status-dot offline';
     }
-    txt.textContent = text;
     document.getElementById('settings-status').textContent = text;
+    nightActive = !!s.night_active;
+    nightOff    = !!s.night_off;
+    if (nightOff)         text += ` · night off until ${s.night_until}`;
+    else if (nightActive) text += ` · night schedule paused until ${s.night_until}`;
+    txt.textContent = text;
+    updatePowerButton();
 
     let fw = 'Not reported yet';
     if (s.fw_build) {
@@ -1514,6 +1562,10 @@ async function init() {
   document.getElementById('toggle-weather').checked    = !!cfg.show_weather;
   document.getElementById('toggle-dual').checked       = dualOn;
   document.getElementById('toggle-animations').checked = !!cfg.animations;
+  document.getElementById('toggle-night').checked      = !!cfg.night_mode;
+  document.getElementById('night-start').value         = cfg.night_start || '01:00';
+  document.getElementById('night-end').value           = cfg.night_end || '06:00';
+  updateNightUI();
   refreshWeatherHint();
   document.getElementById('demo-banner').classList.toggle('show', !!cfg.demo);
   updateMinimalistUI();
@@ -1764,17 +1816,85 @@ function adjustWalk(delta) {
 // ── Power & brightness (apply instantly) ──────────────────────────────────
 function updatePowerButton() {
   const btn = document.getElementById('power-btn');
+  const night = !panelOff && nightOff;   // dark because of the night schedule
   btn.classList.toggle('off', panelOff);
-  btn.classList.toggle('on', !panelOff);
+  btn.classList.toggle('night', night);
+  btn.classList.toggle('on', !panelOff && !night);
+  btn.title = night ? 'Night schedule — tap to turn on until morning' : 'Turn panel on/off';
 }
 
 async function togglePower() {
-  panelOff = !panelOff;
-  updatePowerButton();
-  if (!await patchConfig({ panel_off: panelOff }, panelOff ? 'Panel turning off' : 'Panel turning on')) {
-    panelOff = !panelOff;
+  if (panelOff || nightOff) {                      // turn on
+    if (panelOff) {
+      panelOff = false;
+      updatePowerButton();
+      if (!await patchConfig({ panel_off: false }, nightOff ? null : 'Panel turning on')) {
+        panelOff = true; updatePowerButton(); return;
+      }
+    }
+    if (nightOff) {
+      try {
+        const r = await api('/api/night-skip', { skip: true });
+        nightOff = false;
+        showToast(`Panel on until ${r.until} — night schedule resumes tomorrow`);
+      } catch (e) { showToast('Could not reach the server — ' + e.message); }
+    }
+  } else if (nightActive) {                        // turn off during the window: back to schedule
+    try {
+      await api('/api/night-skip', { skip: false });
+      nightOff = true;
+      showToast('Panel off — back on the night schedule');
+    } catch (e) { showToast('Could not reach the server — ' + e.message); }
+  } else {                                         // ordinary off
+    panelOff = true;
     updatePowerButton();
+    if (!await patchConfig({ panel_off: true }, 'Panel turning off')) panelOff = false;
   }
+  updatePowerButton();
+  refreshStatus();
+}
+
+// ── Night schedule ────────────────────────────────────────────────────────
+function clockLabel(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return `${(h % 12) || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function updateNightUI() {
+  const on = document.getElementById('toggle-night').checked;
+  const start = document.getElementById('night-start').value || '01:00';
+  const end = document.getElementById('night-end').value || '06:00';
+  document.getElementById('night-times').classList.toggle('show', on);
+  document.getElementById('night-hint').textContent = on
+    ? `Off ${clockLabel(start)} – ${clockLabel(end)} every night · tap power to override`
+    : 'Panel turns off overnight · saves instantly';
+}
+
+async function saveNight(on) {
+  updateNightUI();
+  const start = document.getElementById('night-start').value || '01:00';
+  const end = document.getElementById('night-end').value || '06:00';
+  if (!await patchConfig({ night_mode: on, night_start: start, night_end: end },
+                         on ? `Night schedule on — off ${clockLabel(start)} to ${clockLabel(end)}` : 'Night schedule off')) {
+    document.getElementById('toggle-night').checked = !on;
+    updateNightUI();
+  }
+  refreshStatus();
+}
+
+let nightTimer = null;
+function saveNightTimes() {
+  const start = document.getElementById('night-start').value;
+  const end = document.getElementById('night-end').value;
+  updateNightUI();
+  if (!start || !end) return;
+  if (start === end) { showToast('Off and on times must be different'); return; }
+  clearTimeout(nightTimer);   // iOS fires change while the wheel spins; save once it settles
+  nightTimer = setTimeout(async () => {
+    await patchConfig({ night_start: start, night_end: end },
+                      `Night schedule: off ${clockLabel(start)} to ${clockLabel(end)}`);
+    refreshStatus();
+  }, 700);
 }
 
 function setBrightnessUI(v) {
