@@ -591,6 +591,80 @@ class AlertFeedParsing(unittest.TestCase):
         self.assertTrue(out.endswith("…"))
 
 
+def espn_event(eid, state, detail, away, home):
+    def comp(side, t):
+        abbr, loc, score, color, alt = t
+        return {"homeAway": side, "score": str(score),
+                "team": {"abbreviation": abbr, "location": loc, "color": color, "alternateColor": alt}}
+    return {"id": eid, "status": {"type": {"state": state, "shortDetail": detail}},
+            "competitions": [{"competitors": [comp("home", home), comp("away", away)]}]}
+
+
+class LiveScores(unittest.TestCase):
+    NBA = {"events": [
+        espn_event("1", "in", "4:21 - 3rd", ("BOS", "Boston", 70, "008348", "ffffff"), ("DET", "Detroit", 71, "1d428a", "c8102e")),
+        espn_event("2", "in", "Halftime", ("MIA", "Miami", 50, "98002e", "f9a01b"), ("NY", "New York", 61, "1d428a", "f58426")),
+        espn_event("3", "pre", "7:30 PM", ("BKN", "Brooklyn", 0, "000000", "ffffff"), ("LAL", "Los Angeles", 0, "552583", "fdb927")),
+        espn_event("4", "in", "Q4", ("CHI", "Chicago", 90, "ce1141", "000000"), ("PHX", "Phoenix", 120, "1d1160", "e56020")),
+    ]}
+    MLB = {"events": [
+        espn_event("9", "in", "Top 5th", ("NYY", "New York", 3, "003087", "e4002c"), ("TOR", "Toronto", 2, "134a8e", "1d2d5c")),
+        espn_event("8", "post", "Final", ("TB", "Tampa Bay", 2, "092c5c", "8fbce6"), ("CLE", "Cleveland", 3, "002b5c", "e31937")),
+    ]}
+
+    def setUp(self):
+        ps.cache._data.clear()
+        ps._scores_failed.clear()
+
+    def _get(self, url, timeout):
+        return mock.Mock(json=lambda: self.MLB if "baseball" in url else self.NBA, raise_for_status=lambda: None)
+
+    def test_short_status(self):
+        self.assertEqual(ps.short_status("4:21 - 3rd"), "Q3 4:21")
+        self.assertEqual(ps.short_status("0:45.2 - 4th"), "Q4 0:45.2")
+        self.assertEqual(ps.short_status("2:00 - OT"), "OT 2:00")
+        self.assertEqual(ps.short_status("End of 1st"), "END Q1")
+        self.assertEqual(ps.short_status("Top 5th"), "TOP 5TH")
+        self.assertEqual(ps.short_status("Halftime"), "HALFTIME")
+
+    def test_led_color_brightens_dark_navy(self):
+        self.assertEqual(ps.led_color("003087", "e4002c"), (0, 74, 210))     # Yankees navy -> bright blue
+        self.assertEqual(ps.led_color("000000", "ffffff"), (255, 255, 255))  # Nets black -> white alternate
+        self.assertEqual(max(ps.led_color("1d1160", "")), 210)              # no usable alternate: brightened
+        self.assertEqual(ps.led_color("ffffff", ""), (255, 255, 255))
+
+    def test_live_only_ny_first_then_closest(self):
+        with mock.patch.object(ps.requests, "get", side_effect=self._get):
+            games = ps.live_games(["mlb", "nba"])
+        self.assertEqual([g["id"] for g in games], ["9", "2", "1", "4"])    # NYY, Knicks, then 1-pt game, then blowout
+        self.assertEqual(games[0]["detail"], "TOP 5TH")
+
+    def test_payload_rotates_among_ny_games_and_respects_toggles(self):
+        cfg = {**ps.DEFAULT_CONFIG, "show_scores": True}
+        with mock.patch.object(ps.requests, "get", side_effect=self._get), \
+             mock.patch.object(ps.time, "time", return_value=0):
+            a = ps.score_payload(cfg)
+        with mock.patch.object(ps.requests, "get", side_effect=self._get), \
+             mock.patch.object(ps.time, "time", return_value=ps.SCORES_ROTATE_S):
+            b = ps.score_payload(cfg)
+            nba_only = ps.score_payload({**cfg, "scores_mlb": False})
+            off = ps.score_payload({**cfg, "show_scores": False})
+        self.assertEqual((a["away_abbr"], a["away_score"], a["home_abbr"], a["score_status"]), ("NYY", 3, "TOR", "TOP 5TH"))
+        self.assertEqual((b["away_abbr"], b["home_abbr"], b["home_score"]), ("MIA", "NY", 61))
+        self.assertEqual(nba_only["home_abbr"], "NY")
+        self.assertEqual(off, {"score_on": 0})
+
+    def test_no_ny_game_shows_closest_and_outage_is_quiet(self):
+        cfg = {**ps.DEFAULT_CONFIG, "show_scores": True, "scores_mlb": False}
+        self.NBA = {"events": [e for e in LiveScores.NBA["events"] if e["id"] != "2"]}
+        with mock.patch.object(ps.requests, "get", side_effect=self._get), \
+             mock.patch.object(ps.time, "time", return_value=0):
+            self.assertEqual(ps.score_payload(cfg)["away_abbr"], "BOS")
+        ps.cache._data.clear()
+        with mock.patch.object(ps.requests, "get", side_effect=ps.requests.Timeout()):
+            self.assertEqual(ps.score_payload(cfg), {"score_on": 0})
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

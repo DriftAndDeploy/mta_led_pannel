@@ -65,6 +65,12 @@ NYC_CENTER        = (40.7128, -74.0060)
 
 ARRIVING_WINDOW_S = 60     # a train due within this many seconds is "arriving"
 
+SCORES_URL       = "https://site.api.espn.com/apis/site/v2/sports/{}/scoreboard"
+SCORES_LEAGUES   = {"mlb": "baseball/mlb", "nba": "basketball/nba"}
+SCORES_TTL_S     = 30      # live scores refresh
+SCORES_ROTATE_S  = 120     # with several games, the panel's card moves to the next one this often
+NY_LOCATIONS     = {"New York", "Brooklyn"}   # Yankees, Mets, Knicks, Nets
+
 os.makedirs(DATA_DIR, exist_ok=True)
 
 app = Flask(__name__)
@@ -122,6 +128,9 @@ DEFAULT_CONFIG = {
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
     "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
     "animations":    False,  # train pulls across the panel when one is arriving
+    "show_scores":   False,  # live game score card every 2 min while a game is on
+    "scores_mlb":    True,
+    "scores_nba":    True,
     "night_mode":    False,  # panel off overnight
     "night_start":   "01:00",
     "night_end":     "06:00",
@@ -271,6 +280,9 @@ CONFIG_SCHEMA = {
     "latch_blanking": _int_range(1, 8),
     "show_weather":  _bool,
     "animations":    _bool,
+    "show_scores":   _bool,
+    "scores_mlb":    _bool,
+    "scores_nba":    _bool,
     "night_mode":    _bool,
     "night_start":   _text(5, r"(?:[01]\d|2[0-3]):[0-5]\d"),
     "night_end":     _text(5, r"(?:[01]\d|2[0-3]):[0-5]\d"),
@@ -980,6 +992,114 @@ def preview_list(year: int) -> list[tuple[str, str]]:
     return out
 
 
+# ── Live scores (ESPN's public scoreboard JSON, no key) ──────────────────
+
+def led_color(primary: str, alternate: str = "") -> tuple[int, int, int]:
+    """A team colour that shows up on the LED panel: dark navies (Yankees,
+    Mets) fall back to the alternate colour or get brightened."""
+    def parse(h):
+        try:
+            return hex_to_rgb(h) if h and len(h.lstrip("#")) == 6 else None
+        except ValueError:
+            return None
+    c = parse(primary) or parse(alternate) or (200, 200, 200)
+    alt = parse(alternate)
+    if max(c) < 110 and alt and max(alt) > max(c):
+        c = alt
+    peak = max(c) or 1
+    k = 210 / peak if peak < 210 else 1.0
+    return tuple(min(255, int(v * k)) for v in c)
+
+
+def short_status(detail: str) -> str:
+    """ESPN's status, short enough for the panel (10 chars):
+    '4:21 - 3rd' -> 'Q3 4:21', 'End of 1st' -> 'END Q1', '2:00 - OT' -> 'OT 2:00'."""
+    d = (detail or "").strip()
+    m = re.fullmatch(r"(\d+:\d+(?:\.\d)?) - (\d)(?:st|nd|rd|th)", d, re.I)
+    if m:
+        return f"Q{m[2]} {m[1]}"
+    m = re.fullmatch(r"(\d+:\d+(?:\.\d)?) - (\d*OT)", d, re.I)
+    if m:
+        return f"{m[2].upper()} {m[1]}"
+    m = re.fullmatch(r"End of (\d)(?:st|nd|rd|th)(?: Quarter)?", d, re.I)
+    if m:
+        return f"END Q{m[1]}"
+    return d.upper()[:10]
+
+
+def parse_scoreboard(data: dict, league: str) -> list[dict]:
+    games = []
+    for ev in data.get("events", []):
+        st = ev.get("status", {}).get("type", {})
+        comp = (ev.get("competitions") or [{}])[0]
+        teams = {}
+        for c in comp.get("competitors", []):
+            t = c.get("team", {})
+            teams[c.get("homeAway")] = {
+                "abbr": (t.get("abbreviation") or "?")[:4],
+                "score": int(c.get("score") or 0) if str(c.get("score") or "0").isdigit() else 0,
+                "color": led_color(t.get("color", ""), t.get("alternateColor", "")),
+                "ny": t.get("location") in NY_LOCATIONS,
+            }
+        if "home" not in teams or "away" not in teams:
+            continue
+        games.append({"id": str(ev.get("id")), "league": league, "state": st.get("state"),
+                      "detail": short_status(st.get("shortDetail")),
+                      "away": teams["away"], "home": teams["home"]})
+    return games
+
+
+_scores_failed: dict = {}
+
+
+def live_games(leagues: list[str]) -> list[dict]:
+    """Games in progress, New York teams first, then the closest games."""
+    games = []
+    for lg in leagues:
+        key = ("scores", lg)
+        if time.monotonic() - _scores_failed.get(key, -WEATHER_RETRY_S) < WEATHER_RETRY_S:
+            board = cache.peek(key, MAX_STALE_S) or []
+        else:
+            def load(lg=lg):
+                r = requests.get(SCORES_URL.format(SCORES_LEAGUES[lg]), timeout=WEATHER_TIMEOUT_S)
+                r.raise_for_status()
+                return parse_scoreboard(r.json(), lg)
+            try:
+                board = cache.get(key, SCORES_TTL_S, load)
+            except Exception:
+                log.warning("Scores unavailable (%s)", lg, exc_info=True)
+                _scores_failed[key] = time.monotonic()
+                board = []
+        games += [g for g in board if g["state"] == "in"]
+    ny = [g for g in games if g["away"]["ny"] or g["home"]["ny"]]
+    rest = sorted((g for g in games if g not in ny),
+                  key=lambda g: abs(g["away"]["score"] - g["home"]["score"]))
+    return ny + rest
+
+
+def score_payload(cfg: dict) -> dict:
+    """The one game the panel's score card shows right now (score_on=0: none).
+    Several NY games (or, with none, the 3 closest games) take turns."""
+    off = {"score_on": 0}
+    if not cfg["show_scores"]:
+        return off
+    leagues = [lg for lg in ("mlb", "nba") if cfg[f"scores_{lg}"]]
+    games = live_games(leagues)
+    if not games:
+        return off
+    ny = [g for g in games if g["away"]["ny"] or g["home"]["ny"]]
+    pool = ny or games[:3]
+    g = pool[int(time.time() // SCORES_ROTATE_S) % len(pool)]
+    out = {"score_on": 1, "score_status": g["detail"],
+           "score_seq": zlib.crc32(g["id"].encode()) & 0x7FFFFFFF or 1}
+    for side in ("away", "home"):
+        t = g[side]
+        out[f"{side}_abbr"] = t["abbr"]
+        out[f"{side}_score"] = t["score"]
+        out[f"{side}_r"], out[f"{side}_g"], out[f"{side}_b"] = t["color"]
+    return out
+
+
 def arriving_train(feed, stop_id: str, line: str, now: datetime) -> int:
     """Id of a train pulling into stop_id right now (0 = none).
 
@@ -1118,6 +1238,7 @@ def next_trains():
         })
         payload["error"] = payload["error"] or error2
     payload.update(occasion_payload(panel_id, cfg, now))
+    payload.update(score_payload(cfg))
     if wifi_new:
         payload["wifi_new"] = wifi_new
     return jsonify(payload)
@@ -1243,6 +1364,17 @@ def api_alerts():
         log.warning("Alerts unavailable", exc_info=True)
         return jsonify({"ok": False, "alerts": []})
     return jsonify({"ok": True, "alerts": alerts})
+
+
+@app.get("/api/scores")
+def api_scores():
+    """What the score card would show now, for the web app's toggle hint."""
+    cfg = load_config(require_panel_id())
+    leagues = [lg for lg in ("mlb", "nba") if cfg[f"scores_{lg}"]]
+    games = live_games(leagues)
+    return jsonify({"live": len(games), "games": [
+        f"{g['away']['abbr']} {g['away']['score']} – {g['home']['abbr']} {g['home']['score']} · {g['detail']}"
+        for g in games[:3]]})
 
 
 @app.get("/api/status")

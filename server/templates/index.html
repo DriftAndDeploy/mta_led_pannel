@@ -927,6 +927,19 @@
   }
   .night-times input::-webkit-date-and-time-value { text-align: left; margin: 0; }
   .night-times + .toggle-row { margin-top: 12px; }
+
+  /* League sub-toggles under Live Scores */
+  .league-chips { display: none; gap: 8px; margin-top: 10px; }
+  .league-chips.show { display: flex; }
+  .league-chips + .toggle-row { margin-top: 12px; }
+  .chip input { display: none; }
+  .chip span {
+    display: inline-block; padding: 6px 14px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    font-family: 'Bebas Neue', sans-serif; font-size: 15px; letter-spacing: 2px;
+    color: var(--muted); cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+  }
+  .chip input:checked + span { background: #8ecbff; border-color: #8ecbff; color: #0d0d0d; }
   /* Easter egg */
   .egg-row { display: flex; justify-content: center; padding-top: 18px; }
   .egg-btn {
@@ -1155,6 +1168,20 @@
       <input type="checkbox" id="toggle-weather" onchange="saveWeather(this.checked)">
       <span class="toggle-track"><span class="toggle-thumb"></span></span>
     </label>
+  </div>
+  <div class="toggle-row">
+    <div>
+      <span class="toggle-label">Live Scores</span>
+      <div class="toggle-hint" id="scores-hint">Score card every 2 min while a game is on · NY teams first · saves instantly</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-scores" onchange="saveScores()">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="league-chips" id="league-chips">
+    <label class="chip"><input type="checkbox" id="scores-mlb" checked onchange="saveScores()"><span>MLB</span></label>
+    <label class="chip"><input type="checkbox" id="scores-nba" checked onchange="saveScores()"><span>NBA</span></label>
   </div>
   <div class="toggle-row">
     <div>
@@ -1389,7 +1416,7 @@ let nightOff         = false;   // ...and the panel is actually dark for it
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle', '/api/scores'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1499,6 +1526,7 @@ async function refreshStatus() {
     txt.textContent = 'Server unreachable';
   }
   refreshWifi();
+  refreshScoresHint();
 }
 
 // ── Panel test pattern ───────────────────────────────────────────────────
@@ -1707,6 +1735,10 @@ async function init() {
   document.getElementById('toggle-dual').checked       = dualOn;
   document.getElementById('toggle-both').checked       = bothOn;
   document.getElementById('toggle-animations').checked = !!cfg.animations;
+  document.getElementById('toggle-scores').checked     = !!cfg.show_scores;
+  document.getElementById('scores-mlb').checked        = cfg.scores_mlb !== false;
+  document.getElementById('scores-nba').checked        = cfg.scores_nba !== false;
+  updateScoresUI();
   document.getElementById('toggle-night').checked      = !!cfg.night_mode;
   document.getElementById('night-start').value         = cfg.night_start || '01:00';
   document.getElementById('night-end').value           = cfg.night_end || '06:00';
@@ -1898,6 +1930,10 @@ function updateOptionsSummary() {
   if (!twoRows && !minimal && on('toggle-leave-by')) parts.push('Leave by');
   if (!twoRows && !minimal && on('toggle-alerts')) parts.push('Alerts');
   if (!twoRows && on('toggle-weather')) parts.push('Weather');
+  if (on('toggle-scores')) {
+    const lg = [on('scores-mlb') && 'MLB', on('scores-nba') && 'NBA'].filter(Boolean).join('/');
+    parts.push(`Scores${lg ? ` (${lg})` : ''}`);
+  }
   if (on('toggle-animations')) parts.push('Animations');
   if (on('toggle-night')) {
     parts.push(`Night off ${clockLabel(document.getElementById('night-start').value || '01:00')}–` +
@@ -1991,6 +2027,38 @@ async function refreshWeatherHint() {
   } catch (e) {
     hint.textContent = WEATHER_HINT;
   }
+}
+
+// ── Live scores ───────────────────────────────────────────────────────────
+const SCORES_HINT = 'Score card every 2 min while a game is on · NY teams first · saves instantly';
+
+function updateScoresUI() {
+  const on = document.getElementById('toggle-scores').checked;
+  document.getElementById('league-chips').classList.toggle('show', on);
+  if (!on) document.getElementById('scores-hint').textContent = SCORES_HINT;
+}
+
+async function saveScores() {
+  const on = document.getElementById('toggle-scores').checked;
+  const mlb = document.getElementById('scores-mlb').checked;
+  const nba = document.getElementById('scores-nba').checked;
+  updateScoresUI();
+  if (on && !mlb && !nba) showToast('Pick MLB, NBA or both');
+  const ok = await patchConfig({ show_scores: on, scores_mlb: mlb, scores_nba: nba },
+                               on ? `Live scores on (${[mlb && 'MLB', nba && 'NBA'].filter(Boolean).join(' + ') || 'no leagues'})`
+                                  : 'Live scores off');
+  if (ok) refreshScoresHint();
+}
+
+// Show what's live right now so the toggle is easy to check.
+async function refreshScoresHint() {
+  const hint = document.getElementById('scores-hint');
+  if (!document.getElementById('toggle-scores').checked) { hint.textContent = SCORES_HINT; return; }
+  try {
+    const r = await api('/api/scores');
+    hint.textContent = r.live ? `Live now: ${r.games.join('  ·  ')}`
+                              : 'No games on right now · the card appears when one starts';
+  } catch (e) { hint.textContent = SCORES_HINT; }
 }
 
 async function saveAnimations(on) {

@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.0.0"
-#define FW_BUILD   700
+#define FW_VERSION "7.1.0"
+#define FW_BUILD   710
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -61,6 +61,8 @@ const uint32_t ID_SPLASH_MS      = 15000;   // Panel ID screen on power-up
 const uint32_t ARRIVAL_ANIM_MS   = 4300;    // arriving-train animation length
 const uint32_t OCCASION_MS       = 10000;   // holiday/season animation length...
 const uint32_t OCCASION_EVERY_MS = 600000;  // ...played every 10 minutes
+const uint32_t SCORE_MS          = 6000;    // live-score card length...
+const uint32_t SCORE_EVERY_MS    = 120000;  // ...shown every 2 minutes during a game
 const uint32_t HTTP_TIMEOUT_MS   = 8000;
 
 // Panel driving. latch_blanking hides the "ghost" glow / faint lines that
@@ -102,6 +104,13 @@ struct PanelState {
   uint8_t  occasion       = 0;      // OCC_* holiday/season animation (0 = none)
   char     occasion_label[24] = "";
   uint32_t occasion_seq   = 0;      // changes -> play now (previews)
+  // Live score card (one game, chosen by the server)
+  bool     score_on       = false;
+  char     away_abbr[5]   = "", home_abbr[5] = "";
+  int16_t  away_score     = 0, home_score = 0;
+  uint8_t  away_r = 200, away_g = 200, away_b = 200, home_r = 200, home_g = 200, home_b = 200;
+  char     score_status[12] = "";
+  uint32_t score_seq      = 0;      // changes when a different game is shown
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
   bool     panel_off      = false;
@@ -166,6 +175,7 @@ void drawDual(const PanelState& s);
 void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8_t b, uint16_t textColor);
 uint16_t textColor(const PanelState& s, uint16_t normal);
 void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
+void drawScoreCard(const PanelState& s);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -612,6 +622,15 @@ bool fetchTrainTimes() {
   n.occasion       = doc["occasion"] | 0;
   copyStr(n.occasion_label, sizeof(n.occasion_label), doc["occasion_label"] | "");
   n.occasion_seq   = doc["occasion_seq"] | 0u;
+  n.score_on       = (doc["score_on"] | 0) != 0;
+  copyStr(n.away_abbr, sizeof(n.away_abbr), doc["away_abbr"] | "");
+  copyStr(n.home_abbr, sizeof(n.home_abbr), doc["home_abbr"] | "");
+  n.away_score     = doc["away_score"] | 0;
+  n.home_score     = doc["home_score"] | 0;
+  n.away_r = doc["away_r"] | 200; n.away_g = doc["away_g"] | 200; n.away_b = doc["away_b"] | 200;
+  n.home_r = doc["home_r"] | 200; n.home_g = doc["home_g"] | 200; n.home_b = doc["home_b"] | 200;
+  copyStr(n.score_status, sizeof(n.score_status), doc["score_status"] | "");
+  n.score_seq      = doc["score_seq"] | 0u;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
   n.panel_off      = (doc["panel_off"]  | 0) != 0;
@@ -735,8 +754,10 @@ void render(const PanelState& in) {
   static uint8_t  anim_train = 0;   // 0 none, 1 = train 1, 2 = train 2
   static uint32_t occ_played = 0, occ_last = 0, occ_start = 0;
   static bool     occ_on = false;
+  static uint32_t sc_played = 0, sc_last = 0, sc_start = 0;
+  static bool     sc_on = false;
   bool fresh = millis() - s.updated_ms < 30000;
-  if (!anim_train && !occ_on && fresh) {
+  if (!anim_train && !occ_on && !sc_on && fresh) {
     if (s.arriving && s.arriving != played1) {
       played1 = s.arriving; anim_train = 1; anim_start = millis();
     } else if (s.dual && s.arriving2 && s.arriving2 != played2) {
@@ -756,7 +777,7 @@ void render(const PanelState& in) {
 
   // Holiday / season animation: right away when the sequence changes (new
   // day or a preview), then every 10 minutes while the server sends one.
-  if (!anim_train && !occ_on && fresh && s.occasion) {
+  if (!anim_train && !occ_on && !sc_on && fresh && s.occasion) {
     if (s.occasion_seq != occ_played || millis() - occ_last >= OCCASION_EVERY_MS) {
       occ_on = true;
       occ_start = millis();
@@ -771,6 +792,23 @@ void render(const PanelState& in) {
     }
     occ_on = false;
     occ_last = millis();
+  }
+
+  // Live score card: when a new game comes up, then every 2 minutes.
+  if (!anim_train && !occ_on && !sc_on && fresh && s.score_on) {
+    if (s.score_seq != sc_played || millis() - sc_last >= SCORE_EVERY_MS) {
+      sc_on = true;
+      sc_start = millis();
+      sc_played = s.score_seq;
+    }
+  }
+  if (sc_on) {
+    if (millis() - sc_start < SCORE_MS && s.score_on) {
+      drawScoreCard(s);
+      return;
+    }
+    sc_on = false;
+    sc_last = millis();
   }
 
   // Rebuild the ticker text only when new data arrives.
@@ -1361,6 +1399,33 @@ void drawOccasion(uint32_t e, uint8_t kind, const char* label) {
     case OCC_TURTLE:        drawTurtle(e); break;
   }
   drawLabel(e, label, lc);
+  present();
+}
+
+// Live score card:   NYY        TOR      <- team colours
+//                    3          2       <- big digits, centred in each half
+//                       TOP 5TH          <- game status
+static void centerText(const char* t, int cx, int y, uint16_t c) {
+  dma_display->setTextSize(1);
+  dma_display->setTextColor(c);
+  dma_display->setCursor(cx - ((int)strlen(t) * 6 - 1) / 2, y);
+  dma_display->print(t);
+}
+
+void drawScoreCard(const PanelState& s) {
+  dma_display->clearScreen();
+  char a[6], h[6];
+  snprintf(a, sizeof(a), "%d", s.away_score);
+  snprintf(h, sizeof(h), "%d", s.home_score);
+  centerText(s.away_abbr, 16, 1, dma_display->color565(s.away_r, s.away_g, s.away_b));
+  centerText(s.home_abbr, 48, 1, dma_display->color565(s.home_r, s.home_g, s.home_b));
+  uint16_t digits = textColor(s, dma_display->color565(255, 255, 255));
+  int aw = bigTimeWidth(a), hw = bigTimeWidth(h);
+  drawBigTime(max(0, 16 - aw / 2), 9, a, digits);
+  drawBigTime(min(PANEL_RES_X - hw, 48 - hw / 2), 9, h, digits);
+  if (strlen(a) < 3 && strlen(h) < 3)                       // dash between short scores
+    dma_display->fillRect(30, 15, 4, 2, dma_display->color565(90, 90, 90));
+  centerText(s.score_status, 32, 24, textColor(s, dma_display->color565(230, 190, 60)));
   present();
 }
 
