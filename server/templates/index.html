@@ -2298,10 +2298,10 @@ async function refreshAlerts(force = false) {
     .join('<span class="alert-sep">•</span>');
   box.classList.toggle('severe', data.alerts.some(a => a.level >= 2));
   box.classList.add('show');
-  // Constant reading speed (~75 px/s) however long the alerts are.
+  // Constant reading speed (~85 px/s) however long the alerts are.
   requestAnimationFrame(() => {
     const px = track.scrollWidth;
-    track.style.setProperty('--dur', `${Math.max(6, px / 75).toFixed(1)}s`);
+    track.style.setProperty('--dur', `${Math.max(5, px / 85).toFixed(1)}s`);
     track.style.animation = 'none'; void track.offsetWidth; track.style.animation = '';   // restart
   });
 }
