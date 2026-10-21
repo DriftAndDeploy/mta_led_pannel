@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.3.0"
-#define FW_BUILD   730
+#define FW_VERSION "7.4.0"
+#define FW_BUILD   740
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -112,8 +112,6 @@ struct PanelState {
   int16_t  away_score     = 0, home_score = 0;
   uint8_t  away_r = 200, away_g = 200, away_b = 200, home_r = 200, home_g = 200, home_b = 200;
   char     score_status[12] = "";
-  char     away_logo[11 * 11 * 4 + 1] = "";   // 11x11 RGB565 hex, "" = use the abbreviation
-  char     home_logo[11 * 11 * 4 + 1] = "";
   uint32_t score_seq      = 0;      // changes when a different game is shown
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
@@ -123,10 +121,6 @@ struct PanelState {
   uint32_t updated_ms     = 0;      // millis() of last good response
   uint32_t version        = 0;      // bumps whenever new data arrives
 };
-
-// The render loop copies PanelState (now ~1.2 KB with two team logos) a
-// couple of times per frame; give the Arduino loop task headroom.
-SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 PanelState        g_state;
 SemaphoreHandle_t g_state_mutex = nullptr;
@@ -642,8 +636,6 @@ bool fetchTrainTimes() {
   n.away_r = doc["away_r"] | 200; n.away_g = doc["away_g"] | 200; n.away_b = doc["away_b"] | 200;
   n.home_r = doc["home_r"] | 200; n.home_g = doc["home_g"] | 200; n.home_b = doc["home_b"] | 200;
   copyStr(n.score_status, sizeof(n.score_status), doc["score_status"] | "");
-  copyStr(n.away_logo, sizeof(n.away_logo), doc["away_logo"] | "");
-  copyStr(n.home_logo, sizeof(n.home_logo), doc["home_logo"] | "");
   n.score_seq      = doc["score_seq"] | 0u;
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
@@ -1425,33 +1417,14 @@ static void centerText(const char* t, int cx, int y, uint16_t c) {
 
 // Big score centred on cx. Three-digit scores (basketball) drop the letter
 // spacing so the two halves keep a gap between them.
-static void drawScoreDigits(const char* t, int cx, int y, uint16_t c) {
+static void drawScoreDigits(const char* t, int cx, uint16_t c) {
   int n = strlen(t), adv = n >= 3 ? 10 : 11;
   int w = n * adv - (adv - 10);
   int x = cx - w / 2;
   dma_display->setTextSize(2);
   dma_display->setTextColor(c);
-  for (int i = 0; i < n; i++) { dma_display->setCursor(x + i * adv, y); dma_display->write(t[i]); }
+  for (int i = 0; i < n; i++) { dma_display->setCursor(x + i * adv, 9); dma_display->write(t[i]); }
   dma_display->setTextSize(1);
-}
-
-// 11x11 team logo from the server (RGB565 hex), centred on cx. 'bright'
-// scales it (the winner's logo pulses during a win celebration).
-static const int LOGO_SIZE = 11;
-static bool hasLogo(const char* hexpx) { return strlen(hexpx) == LOGO_SIZE * LOGO_SIZE * 4; }
-
-static void drawTeamLogo(const char* hexpx, int cx, int y, float bright = 1.0f) {
-  int x0 = cx - LOGO_SIZE / 2;
-  for (int i = 0; i < LOGO_SIZE * LOGO_SIZE; i++) {
-    char buf[5] = {hexpx[i * 4], hexpx[i * 4 + 1], hexpx[i * 4 + 2], hexpx[i * 4 + 3], 0};
-    uint16_t c = (uint16_t)strtoul(buf, nullptr, 16);
-    if (!c) continue;
-    if (bright < 0.99f) {
-      uint8_t r = ((c >> 11) & 31) << 3, g = ((c >> 5) & 63) << 2, b = (c & 31) << 3;
-      c = dma_display->color565(r * bright, g * bright, b * bright);
-    }
-    px(x0 + i % LOGO_SIZE, y + i / LOGO_SIZE, c);
-  }
 }
 
 // Scores-only screen. A game: the card above; a just-won game: confetti in
@@ -1503,29 +1476,19 @@ void drawScores(const PanelState& s, bool stale) {
   auto teamColor = [&](uint8_t r, uint8_t g, uint8_t b, bool winner) {
     return (winner && flash) ? dma_display->color565(255, 255, 255) : dma_display->color565(r, g, b);
   };
-  // With logos:  [logo]   [logo]      Without:  NYY     BOS
-  //                 5        3                     5       3
-  //                  TOP 9TH                        TOP 9TH
-  bool logos = hasLogo(s.away_logo) && hasLogo(s.home_logo);
-  int digitsY = logos ? 11 : 9;
-  if (logos) {
-    drawTeamLogo(s.away_logo, 16, 0, (s.score_win == 1 && !flash) ? 0.45f : 1.0f);
-    drawTeamLogo(s.home_logo, 48, 0, (s.score_win == 2 && !flash) ? 0.45f : 1.0f);
-  } else {
-    centerText(s.away_abbr, 16, 1, teamColor(s.away_r, s.away_g, s.away_b, s.score_win == 1));
-    centerText(s.home_abbr, 48, 1, teamColor(s.home_r, s.home_g, s.home_b, s.score_win == 2));
-  }
+  centerText(s.away_abbr, 16, 1, teamColor(s.away_r, s.away_g, s.away_b, s.score_win == 1));
+  centerText(s.home_abbr, 48, 1, teamColor(s.home_r, s.home_g, s.home_b, s.score_win == 2));
   uint16_t digits = textColor(s, dma_display->color565(255, 255, 255));
-  drawScoreDigits(a, 16, digitsY, digits);
-  drawScoreDigits(h, 48, digitsY, digits);
+  drawScoreDigits(a, 16, digits);
+  drawScoreDigits(h, 48, digits);
   if (strlen(a) < 3 && strlen(h) < 3)                       // dash between short scores
-    dma_display->fillRect(30, digitsY + 6, 4, 2, dma_display->color565(90, 90, 90));
+    dma_display->fillRect(30, 15, 4, 2, dma_display->color565(90, 90, 90));
   if (win) {
     char msg[12];
     snprintf(msg, sizeof(msg), "%s WIN!", s.score_win == 1 ? s.away_abbr : s.home_abbr);
-    centerText(msg, 32, logos ? 25 : 24, flash ? dma_display->color565(255, 230, 120) : dma_display->color565(wr, wg, wb));
+    centerText(msg, 32, 24, flash ? dma_display->color565(255, 230, 120) : dma_display->color565(wr, wg, wb));
   } else {
-    centerText(s.score_status, 32, logos ? 25 : 24, textColor(s, dma_display->color565(230, 190, 60)));
+    centerText(s.score_status, 32, 24, textColor(s, dma_display->color565(230, 190, 60)));
   }
   present();
 }

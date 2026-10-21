@@ -71,8 +71,6 @@ SCORES_TTL_S     = 30      # live scores refresh
 SCORES_ROTATE_S  = 20      # with several games, the panel moves to the next one this often
 WIN_SHOW_S       = 300     # after a game ends, show the final (and celebrate a win) this long
 NY_LOCATIONS     = {"New York", "Brooklyn"}   # Yankees, Mets, Knicks, Nets
-LOGO_PX          = 11      # team logos on the score card are 11x11 pixels
-LOGO_DIR         = os.path.join(DATA_DIR, "logos")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -1040,7 +1038,6 @@ def parse_scoreboard(data: dict, league: str) -> list[dict]:
             t = c.get("team", {})
             teams[c.get("homeAway")] = {
                 "abbr": (t.get("abbreviation") or "?")[:4],
-                "logo_url": t.get("logoDark") or t.get("logo") or "",   # dark-background version
                 "score": int(c.get("score") or 0) if str(c.get("score") or "0").isdigit() else 0,
                 "color": led_color(t.get("color", ""), t.get("alternateColor", "")),
                 "ny": t.get("location") in NY_LOCATIONS,
@@ -1122,79 +1119,6 @@ def next_game(games: list[dict]) -> str:
     return ""
 
 
-# ── Team logos for the score card ─────────────────────────────────────────
-# The Pi downloads each team's logo once from ESPN (the logoDark image the
-# scoreboard feed links to, made for dark backgrounds), shrinks it to 11x11,
-# boosts it for the LEDs and caches the result on disk. The panel gets it as
-# 121 RGB565 pixels in hex. Any failure just means abbreviations instead.
-
-_logo_mem: dict = {}
-_logo_failed: dict = {}
-
-
-def logo_pixels(img, size: int = LOGO_PX) -> str:
-    """PIL image -> size x size RGB565 hex string ('0000' = off)."""
-    from PIL import Image
-    img = img.convert("RGBA")
-    box = img.getchannel("A").point(lambda a: 255 if a > 40 else 0).getbbox()
-    if box:
-        img = img.crop(box)                                    # drop transparent margins
-    w, h = img.size
-    side = max(w, h)
-    square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    square.paste(img, ((side - w) // 2, (side - h) // 2))
-    small = square.resize((size, size), Image.LANCZOS)
-    px = list(small.getdata())
-    lit = [p for p in px if p[3] >= 110]
-    peak = max((max(p[:3]) for p in lit), default=255) or 255
-    gain = min(3.0, 255 / peak)                                # brighten dim logos
-    out = []
-    for r, g, b, a in px:
-        if a < 110:
-            out.append("0000")
-            continue
-        r, g, b = (min(255, int(v * gain)) for v in (r, g, b))
-        m = max(r, g, b)
-        if m < 25:                                             # near-black: faint grey so the shape shows
-            r = g = b = 40
-        elif m < 120:                                          # dark colour (navy...): lift, keep the hue
-            r, g, b = (int(v * 120 / m) for v in (r, g, b))
-        out.append(f"{((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3):04x}")
-    return "".join(out)
-
-
-def team_logo(url: str) -> str:
-    """Cached LED-ready logo for an ESPN logo URL, or '' if unavailable."""
-    if not url:
-        return ""
-    if url in _logo_mem:
-        return _logo_mem[url]
-    if time.monotonic() - _logo_failed.get(url, -3600) < 3600:
-        return ""
-    path = os.path.join(LOGO_DIR, hashlib.sha1(url.encode()).hexdigest()[:16] + f"_{LOGO_PX}.txt")
-    try:
-        with open(path) as f:
-            _logo_mem[url] = f.read().strip()
-            return _logo_mem[url]
-    except OSError:
-        pass
-    try:
-        from io import BytesIO
-        from PIL import Image
-        r = requests.get(url, timeout=WEATHER_TIMEOUT_S)
-        r.raise_for_status()
-        hexpx = logo_pixels(Image.open(BytesIO(r.content)))
-        os.makedirs(LOGO_DIR, exist_ok=True)
-        with open(path, "w") as f:
-            f.write(hexpx)
-        _logo_mem[url] = hexpx
-        return hexpx
-    except Exception:
-        log.warning("Logo unavailable: %s", url, exc_info=True)
-        _logo_failed[url] = time.monotonic()
-        return ""
-
-
 def winner_side(g: dict) -> int:
     """1 = away won, 2 = home won, 0 = no celebration (tie, or a NY team lost)."""
     a, h = g["away"], g["home"]
@@ -1209,9 +1133,6 @@ def _game_fields(g: dict) -> dict:
            "score_seq": zlib.crc32(g["id"].encode()) & 0x7FFFFFFF or 1,
            "score_final": 1 if g["state"] == "post" else 0,
            "score_win": winner_side(g) if g["state"] == "post" else 0}
-    logos = {side: team_logo(g[side].get("logo_url", "")) for side in ("away", "home")}
-    if all(logos.values()):            # both or neither, so the card stays balanced
-        out["away_logo"], out["home_logo"] = logos["away"], logos["home"]
     for side in ("away", "home"):
         t = g[side]
         out[f"{side}_abbr"] = t["abbr"]
