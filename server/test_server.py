@@ -723,6 +723,53 @@ class ScoresEndOfGame(unittest.TestCase):
         self.assertEqual(bad.status_code, 400)
 
 
+class TeamLogos(unittest.TestCase):
+    def setUp(self):
+        ps._logo_mem.clear(); ps._logo_failed.clear()
+
+    def png(self):
+        from io import BytesIO
+        from PIL import Image, ImageDraw
+        img = Image.new("RGBA", (500, 500), (0, 0, 0, 0))
+        ImageDraw.Draw(img).ellipse([100, 150, 400, 350], fill=(0, 40, 120, 255))   # dark navy oval
+        buf = BytesIO(); img.save(buf, "PNG")
+        return buf.getvalue()
+
+    def test_logo_is_trimmed_shrunk_and_brightened(self):
+        from io import BytesIO
+        from PIL import Image
+        hexpx = ps.logo_pixels(Image.open(BytesIO(self.png())))
+        self.assertEqual(len(hexpx), ps.LOGO_PX * ps.LOGO_PX * 4)
+        px = [int(hexpx[i:i + 4], 16) for i in range(0, len(hexpx), 4)]
+        lit = [p for p in px if p]
+        self.assertTrue(0.3 < len(lit) / len(px) < 0.9)                  # oval fills the trimmed square
+        self.assertGreaterEqual(max((p & 31) << 3 for p in lit), 240)    # navy boosted to full blue
+        self.assertEqual(px[0], 0)                                       # corners stay off
+
+    def test_fetch_once_cache_and_fail_quietly(self):
+        resp = mock.Mock(content=self.png(), raise_for_status=lambda: None)
+        url = "https://a.espncdn.com/i/teamlogos/nba/500-dark/test.png"
+        with mock.patch.object(ps.requests, "get", return_value=resp) as get:
+            a = ps.team_logo(url)
+            b = ps.team_logo(url)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(a, b)
+        ps._logo_mem.clear()
+        with mock.patch.object(ps.requests, "get", side_effect=AssertionError("should use disk cache")):
+            self.assertEqual(ps.team_logo(url), a)
+        with mock.patch.object(ps.requests, "get", side_effect=ps.requests.Timeout()):
+            self.assertEqual(ps.team_logo(url + "?x"), "")
+
+    def test_card_sends_logos_only_when_both_load(self):
+        g = dict(ps.SAMPLE_GAMES["live"])
+        g["away"] = dict(g["away"], logo_url="a"); g["home"] = dict(g["home"], logo_url="b")
+        with mock.patch.object(ps, "team_logo", side_effect=lambda u: "0000" * 121 if u == "a" else ""):
+            self.assertNotIn("away_logo", ps._game_fields(g))
+        with mock.patch.object(ps, "team_logo", return_value="ffff" * 121):
+            f = ps._game_fields(g)
+        self.assertEqual(len(f["away_logo"]), 484)
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

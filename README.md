@@ -155,7 +155,10 @@ protects against crashes, not against firmware that runs but misbehaves.
   sub-toggles) turns the panel into a scoreboard: it shows games *instead of*
   trains, and the train options are locked in the web app until it's turned off
   (Night Schedule still works). Team abbreviations in team colours, big scores,
-  inning/quarter. A Yankees/Mets/Knicks/Nets game always wins; several take turns
+  inning/quarter, with each team's logo above its score (the Pi fetches ESPN's
+  dark-background logo once, shrinks it to 11×11 and caches it in
+  `server/data/logos/`; if it can't, the abbreviation shows instead). A
+  Yankees/Mets/Knicks/Nets game always wins; several take turns
   every 20 s; with none, the closest games do. When a game it was showing ends,
   the final stays up for 5 minutes with confetti and "NYK WIN!" (no celebration
   if a New York team lost). No game on: "NEXT GAME" with the next start time.
