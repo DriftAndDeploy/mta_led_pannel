@@ -151,6 +151,17 @@ protects against crashes, not against firmware that runs but misbehaves.
   shows it beside the bullet, or at the front of the scrolling text; minimalist
   mode shows it centred under the time. Data from Open-Meteo (free, no key),
   refreshed every 15 min; if it can't be reached the panel just hides it.
+- **Faster Route** (**Display Options → Faster Route**): pick a destination
+  station and up to two more stations you can walk to (with walk times; your
+  panel's station from 02/05 is always the first). Using the live feeds of every
+  line, the Pi works out when each option would actually get you there: direct,
+  or with one transfer (any two stations within ~300 m count, e.g. Union Sq or
+  Broadway-Lafayette/Bleecker, with walking time added). If something beats your
+  usual train by **5+ minutes**, the panel switches to it: the bullet and
+  departure time of the train to take, and a scrolling line naming the station,
+  e.g. "ALT: Flushing Av (M), leave 7:40. M to Broadway-Lafayette St, walk to
+  Bleecker St, then 6. Arr 8:11 (12 min sooner)". The toggle's hint shows the
+  current suggestion.
 - **Live Scores** (**Display Options → Live Scores**, with **MLB** / **NBA**
   sub-toggles) turns the panel into a scoreboard: it shows games *instead of*
   trains, and the train options are locked in the web app until it's turned off

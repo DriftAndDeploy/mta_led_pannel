@@ -934,6 +934,36 @@
   .scores-note.show { display: block; }
   .scores-note + .toggle-row { margin-top: 12px; }
 
+  /* Faster route setup */
+  .alt-config { display: none; margin-top: 12px; }
+  .alt-config.show { display: block; }
+  .alt-config + .toggle-row { margin-top: 14px; }
+  .alt-label { font-size: 10px; letter-spacing: 1px; color: var(--muted); margin: 12px 0 6px; }
+  .alt-label:first-child { margin-top: 0; }
+  .alt-chip {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    font-size: 13px;
+  }
+  .alt-chip .x { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0 2px; }
+  .alt-results { max-height: 200px; margin-top: 6px; display: none; }
+  .alt-results.show { display: block; }
+  .alt-results .station-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .mini-bullets { display: flex; gap: 3px; flex-shrink: 0; }
+  .mini-bullet {
+    width: 16px; height: 16px; border-radius: 50%; font-family: 'Bebas Neue', sans-serif;
+    font-size: 11px; display: flex; align-items: center; justify-content: center; color: #fff;
+  }
+  .alt-origin { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .alt-origin .alt-chip { flex: 1; min-width: 0; padding: 8px 10px; }
+  .alt-origin .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .alt-walk { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  .alt-walk button {
+    width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 15px; cursor: pointer; line-height: 1;
+  }
+  .alt-add { margin-top: 8px; }
+
   /* League sub-toggles under Live Scores */
   .league-chips { display: none; gap: 8px; margin-top: 10px; }
   .league-chips.show { display: flex; }
@@ -1174,6 +1204,25 @@
       <input type="checkbox" id="toggle-weather" onchange="saveWeather(this.checked)">
       <span class="toggle-track"><span class="toggle-thumb"></span></span>
     </label>
+  </div>
+  <div class="toggle-row">
+    <div>
+      <span class="toggle-label">Faster Route</span>
+      <div class="toggle-hint" id="alt-hint">Suggests another train or station when it gets you to your destination 5+ min sooner · saves instantly</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-alt" onchange="saveAlt()">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <div class="alt-config" id="alt-config">
+    <div class="alt-label">DESTINATION</div>
+    <div id="alt-dest-box"></div>
+    <div class="alt-label">STARTING STATIONS (UP TO 3)</div>
+    <div class="alt-origin"><div class="alt-chip"><span class="name" id="alt-home">—</span></div>
+      <span class="alt-walk" id="alt-home-walk">—</span></div>
+    <div id="alt-origins"></div>
+    <div class="alt-add" id="alt-add-box"></div>
   </div>
   <div class="toggle-row">
     <div>
@@ -1428,7 +1477,7 @@ let nightOff         = false;   // ...and the panel is actually dark for it
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle', '/api/scores', '/api/preview-scores'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle', '/api/scores', '/api/preview-scores', '/api/alt-route'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1539,6 +1588,7 @@ async function refreshStatus() {
   }
   refreshWifi();
   refreshScoresHint();
+  refreshAltHint();
 }
 
 // ── Panel test pattern ───────────────────────────────────────────────────
@@ -1747,6 +1797,10 @@ async function init() {
   document.getElementById('toggle-dual').checked       = dualOn;
   document.getElementById('toggle-both').checked       = bothOn;
   document.getElementById('toggle-animations').checked = !!cfg.animations;
+  altCfg = { on: !!cfg.alt_routes, dest: cfg.alt_dest ? { id: cfg.alt_dest, name: cfg.alt_dest_name || cfg.alt_dest } : null,
+             origins: (cfg.alt_origins || []).map(o => ({ ...o })) };
+  document.getElementById('toggle-alt').checked        = altCfg.on;
+  renderAlt();
   document.getElementById('toggle-scores').checked     = !!cfg.show_scores;
   document.getElementById('scores-mlb').checked        = cfg.scores_mlb !== false;
   document.getElementById('scores-nba').checked        = cfg.scores_nba !== false;
@@ -1952,6 +2006,7 @@ function updateOptionsSummary() {
   if (!twoRows && on('toggle-leave-by')) parts.push('Leave by');
   if (!twoRows && on('toggle-alerts')) parts.push('Alerts');
   if (!twoRows && on('toggle-weather')) parts.push('Weather');
+  if (on('toggle-alt') && altCfg.dest) parts.push(`Faster route → ${altCfg.dest.name.replace(/ \(.*\)$/, '')}`);
   if (on('toggle-animations')) parts.push('Animations');
   if (on('toggle-night')) {
     parts.push(`Night off ${clockLabel(document.getElementById('night-start').value || '01:00')}–` +
@@ -2047,6 +2102,139 @@ async function refreshWeatherHint() {
   }
 }
 
+// ── Faster route ──────────────────────────────────────────────────────────
+// Destination + up to 2 more starting stations (the panel's own station from
+// section 02, with the walk time from 05, is always the first).
+const ALT_HINT = 'Suggests another train or station when it gets you to your destination 5+ min sooner · saves instantly';
+let altCfg = { on: false, dest: null, origins: [] };
+let everyStation = null;
+let altSearch = null;         // which picker is open: 'dest' | 'origin' | null
+let altWalkTimer = null;
+
+async function loadAllStations() {
+  if (!everyStation) {
+    try { everyStation = await api('/api/all-stations'); } catch (e) { everyStation = []; }
+  }
+  return everyStation;
+}
+
+function miniBullets(lines) {
+  return `<span class="mini-bullets">${(lines || []).slice(0, 6).map(l =>
+    `<span class="mini-bullet" style="background:${LINE_COLORS[l] || '#555'};color:${['N','Q','R','W'].includes(l) ? '#000' : '#fff'}">${l}</span>`).join('')}</span>`;
+}
+
+function pickerHtml(kind, placeholder) {
+  return `<input class="station-search" id="alt-${kind}-q" placeholder="${placeholder}" autocomplete="off"
+            oninput="renderAltResults('${kind}')">
+          <div class="station-list alt-results" id="alt-${kind}-results"></div>`;
+}
+
+function renderAlt() {
+  const on = document.getElementById('toggle-alt').checked;
+  document.getElementById('alt-config').classList.toggle('show', on);
+  const t1 = trainAt(0);
+  document.getElementById('alt-home').textContent = t1?.station ? `${t1.station.name} (your station)` : 'Pick a station in 02';
+  document.getElementById('alt-home-walk').textContent = `${t1?.walk ?? walkMinutes} min`;   // set in 05
+
+  const destBox = document.getElementById('alt-dest-box');
+  if (altCfg.dest && altSearch !== 'dest') {
+    destBox.innerHTML = `<div class="alt-chip"><span>${escapeHtml(altCfg.dest.name)}</span>
+      <button class="x" onclick="openAltPicker('dest')" aria-label="Change destination">✎</button></div>`;
+  } else if (altSearch !== 'dest' || !document.getElementById('alt-dest-q')) {
+    destBox.innerHTML = pickerHtml('dest', 'Search your destination station...');
+  }
+
+  document.getElementById('alt-origins').innerHTML = altCfg.origins.map((o, i) => `
+    <div class="alt-origin">
+      <div class="alt-chip"><span class="name">${escapeHtml(o.name)}</span>
+        <button class="x" onclick="removeAltOrigin(${i})" aria-label="Remove">×</button></div>
+      <span class="alt-walk"><button onclick="altWalk(${i},-1)">−</button>${o.walk} min<button onclick="altWalk(${i},1)">+</button></span>
+    </div>`).join('');
+
+  const addBox = document.getElementById('alt-add-box');
+  if (altCfg.origins.length >= 2) addBox.innerHTML = '';
+  else if (altSearch === 'origin') { if (!document.getElementById('alt-origin-q')) addBox.innerHTML = pickerHtml('origin', 'Another station you can walk to...'); }
+  else addBox.innerHTML = `<button class="hint-link" onclick="openAltPicker('origin')">+ Add a station you can walk to</button>`;
+}
+
+async function openAltPicker(kind) {
+  altSearch = kind;
+  if (kind === 'dest') document.getElementById('alt-dest-box').innerHTML = pickerHtml('dest', 'Search your destination station...');
+  renderAlt();
+  await loadAllStations();
+  const q = document.getElementById(`alt-${kind}-q`);
+  if (q) q.focus();
+  renderAltResults(kind);
+}
+
+function renderAltResults(kind) {
+  const box = document.getElementById(`alt-${kind}-results`);
+  const q = (document.getElementById(`alt-${kind}-q`)?.value || '').trim().toLowerCase();
+  if (!box) return;
+  if (!q || !everyStation) { box.classList.remove('show'); box.innerHTML = ''; return; }
+  const hits = everyStation.filter(s => s.name.toLowerCase().includes(q)).slice(0, 8);
+  box.innerHTML = hits.length ? hits.map(s =>
+    `<div class="station-item" onclick="chooseAltStation('${kind}','${s.id}')"><span>${escapeHtml(s.name)}</span>${miniBullets(s.lines)}</div>`).join('')
+    : '<div class="station-empty">No matching stations</div>';
+  box.classList.add('show');
+}
+
+function stationLabel(s) {
+  return s.lines?.length ? `${s.name} (${s.lines.join(' ')})` : s.name;
+}
+
+function chooseAltStation(kind, id) {
+  const st = everyStation.find(s => s.id === id);
+  if (!st) return;
+  if (kind === 'dest') altCfg.dest = { id: st.id, name: stationLabel(st) };
+  else if (altCfg.origins.length < 2 && !altCfg.origins.some(o => o.stop === st.id)) {
+    altCfg.origins.push({ stop: st.id, name: stationLabel(st), walk: 8 });
+  }
+  altSearch = null;
+  renderAlt();
+  saveAlt();
+}
+
+function removeAltOrigin(i) {
+  altCfg.origins.splice(i, 1);
+  renderAlt();
+  saveAlt();
+}
+
+function altWalk(i, d) {
+  altCfg.origins[i].walk = Math.max(0, Math.min(60, altCfg.origins[i].walk + d));
+  renderAlt();
+  clearTimeout(altWalkTimer);
+  altWalkTimer = setTimeout(saveAlt, 600);
+}
+
+async function saveAlt() {
+  const on = document.getElementById('toggle-alt').checked;
+  altCfg.on = on;
+  renderAlt();
+  updateOptionsSummary();
+  if (on && !altCfg.dest) { showToast('Pick your destination station'); openAltPicker('dest'); }
+  await patchConfig({
+    alt_routes: on,
+    alt_dest: altCfg.dest?.id || '',
+    alt_dest_name: altCfg.dest?.name || '',
+    alt_origins: altCfg.origins,
+  }, null);
+  refreshAltHint();
+}
+
+async function refreshAltHint() {
+  const hint = document.getElementById('alt-hint');
+  if (!document.getElementById('toggle-alt').checked || !altCfg.dest) { hint.textContent = ALT_HINT; return; }
+  try {
+    const r = await api('/api/alt-route');
+    if (!r.ok) { hint.textContent = ALT_HINT; return; }
+    if (!r.best) hint.textContent = 'No trains to your destination in the next 45 min right now';
+    else if (r.active) hint.textContent = `Panel is suggesting: ${r.best}` + (r.usual ? ` (${r.saves} min sooner)` : '');
+    else hint.textContent = `Right now your usual train is best: ${r.usual || r.best}`;
+  } catch (e) { hint.textContent = ALT_HINT; }
+}
+
 // ── Live scores ───────────────────────────────────────────────────────────
 const SCORES_HINT = 'Scores only: the panel shows games instead of trains · NY teams first';
 
@@ -2057,7 +2245,8 @@ function updateScoresUI() {
   if (!on) document.getElementById('scores-hint').textContent = SCORES_HINT;
   // Scores only: lock everything about trains so it's clear what the panel shows.
   const rows = ['toggle-dual', 'toggle-both', 'toggle-leave-by', 'toggle-alerts', 'toggle-weather',
-                'toggle-animations', 'toggle-minimalist'];
+                'toggle-animations', 'toggle-minimalist', 'toggle-alt'];
+  document.getElementById('alt-config').classList.toggle('locked', on);
   rows.forEach(id => document.getElementById(id).closest('.toggle-row').classList.toggle('locked', on));
   document.getElementById('dual-note').classList.toggle('locked', on);
   ['line-grid', 'station-list', 'platform-N', 'walk-val'].forEach(id =>

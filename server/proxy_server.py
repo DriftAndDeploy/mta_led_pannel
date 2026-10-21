@@ -129,6 +129,10 @@ DEFAULT_CONFIG = {
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
     "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
     "animations":    False,  # train pulls across the panel when one is arriving
+    "alt_routes":    False,  # suggest a faster route to alt_dest
+    "alt_dest":      "",
+    "alt_dest_name": "",
+    "alt_origins":   [],     # up to 2 more stations you can walk to: {stop, name, walk}
     "show_scores":   False,  # live game score card every 2 min while a game is on
     "scores_mlb":    True,
     "scores_nba":    True,
@@ -295,6 +299,27 @@ CONFIG_SCHEMA = {
     "platform2":     _choice({"N", "S"}),
     "walk_minutes2": _int_range(0, 90),
 }
+
+
+def _alt_origins(v):
+    if not isinstance(v, list) or len(v) > MAX_ALT_ORIGINS:
+        raise ValueError(f"must be a list of up to {MAX_ALT_ORIGINS} stations")
+    out = []
+    for o in v:
+        if not isinstance(o, dict):
+            raise ValueError("each station must be an object")
+        stop = _text(8, r"[A-Z0-9]{1,8}")(o.get("stop", ""))
+        out.append({"stop": stop, "name": _text(60)(o.get("name", "") or stop),
+                    "walk": _int_range(0, 60)(o.get("walk", 5))})
+    return out
+
+
+CONFIG_SCHEMA.update({
+    "alt_routes":    _bool,
+    "alt_dest":      _text(8, r"[A-Z0-9]{0,8}"),
+    "alt_dest_name": _text(60),
+    "alt_origins":   _alt_origins,
+})
 
 
 def validate_update(data) -> tuple[dict, list[str]]:
@@ -778,24 +803,32 @@ def firmware_download():
 # Icon numbers the firmware draws (0 = none).
 WX_ICONS = {"sun": 1, "moon": 2, "partly": 3, "cloud": 4, "rain": 5, "snow": 6, "storm": 7}
 
-_station_coords: dict | None = None
+_static_stations: dict | None = None
 
 
-def station_coords(stop_parent: str) -> tuple[float, float]:
-    """Lat/lon of a station from the GTFS stops list bundled with nyct_gtfs."""
-    global _station_coords
-    if _station_coords is None:
-        coords = {}
+def static_stations() -> dict:
+    """{parent stop id: {"name", "lat", "lon"}} from the GTFS stops list
+    bundled with nyct_gtfs (every subway station, whatever is running)."""
+    global _static_stations
+    if _static_stations is None:
+        out = {}
         path = os.path.join(os.path.dirname(nyct_gtfs.__file__), "gtfs_static", "stops.txt")
         try:
             with open(path, newline="") as f:
                 for row in csv.DictReader(f):
                     if not row.get("parent_station"):
-                        coords[row["stop_id"]] = (float(row["stop_lat"]), float(row["stop_lon"]))
+                        out[row["stop_id"]] = {"name": row["stop_name"].strip(),
+                                               "lat": float(row["stop_lat"]), "lon": float(row["stop_lon"])}
         except (OSError, ValueError, KeyError):
-            log.exception("Could not read station coordinates — weather uses central NYC")
-        _station_coords = coords
-    return _station_coords.get(stop_parent, NYC_CENTER)
+            log.exception("Could not read the station list")
+        _static_stations = out
+    return _static_stations
+
+
+def station_coords(stop_parent: str) -> tuple[float, float]:
+    """Lat/lon of a station (central NYC if unknown)."""
+    st = static_stations().get(stop_parent)
+    return (st["lat"], st["lon"]) if st else NYC_CENTER
 
 
 def weather_icon(code: int, is_day: bool) -> str:
@@ -1176,6 +1209,225 @@ def score_payload(cfg: dict) -> dict:
             "score_msg": f"NEXT {nxt}" if nxt else ("NO GAMES TODAY" if not games else "NO LIVE GAMES")}
 
 
+# ── Alternate routes ──────────────────────────────────────────────────────
+#
+# With a destination station set, the server works out, from the live
+# feeds of every line, when you'd actually arrive by each option: your
+# usual train, or any train from up to 3 starting stations, direct or with
+# one transfer. Each live trip lists its predicted time at every stop still
+# ahead of it, so "arrive at destination" comes straight from the MTA.
+# Transfers are any two stations within ALT_WALK_RADIUS_M of each other
+# (real transfer complexes like Union Sq, plus short street walks), costing
+# 2 min + walking time. The panel only switches to an alternative when it
+# arrives ALT_MIN_SAVE_MIN or more minutes sooner than your usual train.
+
+ALT_WALK_RADIUS_M = 300
+ALT_SAME_STOP_MIN = 1.0     # change trains at the same platform/station
+ALT_MIN_SAVE_MIN  = 5
+ALT_MAX_WAIT_MIN  = 45      # ignore trains leaving more than this far ahead
+ALT_TTL_S         = 30
+MAX_ALT_ORIGINS   = 2       # extra starting stations (plus the panel's own)
+
+_nearby: dict | None = None
+
+
+def _dist_m(a: dict, b: dict) -> float:
+    x = (b["lon"] - a["lon"]) * math.cos(math.radians((a["lat"] + b["lat"]) / 2)) * 111320
+    y = (b["lat"] - a["lat"]) * 110540
+    return math.hypot(x, y)
+
+
+def nearby_stations(parent: str) -> list[tuple[str, float]]:
+    """[(other station, transfer minutes)] within walking distance."""
+    global _nearby
+    if _nearby is None:
+        st = static_stations()
+        ids = list(st)
+        near = {i: [] for i in ids}
+        for n, a in enumerate(ids):
+            for b in ids[n + 1:]:
+                d = _dist_m(st[a], st[b])
+                if d <= ALT_WALK_RADIUS_M:
+                    mins = 2 + d / 80              # ~80 m/min including stairs
+                    near[a].append((b, mins))
+                    near[b].append((a, mins))
+        _nearby = near
+    return _nearby.get(parent, [])
+
+
+def base_line(route_id: str) -> str:
+    """'6X' -> '6', 'FX' -> 'F' (express variants share the line's bullet)."""
+    r = (route_id or "").upper()
+    return r[:-1] if len(r) > 1 and r.endswith("X") and r[:-1] in LINES else r
+
+
+def live_trips() -> list[dict]:
+    """Every live trip on every line: route + [(station, N/S, arrive, depart)]."""
+    urls = {}
+    for line in LINES:
+        urls.setdefault(feed_url(line), line)
+    trips = []
+    for line in urls.values():
+        try:
+            feed = get_feed(line)
+        except Exception:
+            continue                                  # one feed down: route with the rest
+        for t in feed.trips:
+            seq = []
+            for u in t.stop_time_updates:
+                sid = u.stop_id or ""
+                arr, dep = u.arrival or u.departure, u.departure or u.arrival
+                if not sid or arr is None:
+                    continue
+                if arr.tzinfo is None:
+                    arr, dep = arr.replace(tzinfo=EASTERN), dep.replace(tzinfo=EASTERN)
+                seq.append((sid[:-1] if sid[-1:] in ("N", "S") else sid, sid[-1:], arr, dep))
+            if len(seq) >= 2:
+                trips.append({"route": base_line(t.route_id), "stops": seq})
+    return trips
+
+
+def plan_routes(origins: list[tuple[str, int]], dest: str, now: datetime,
+                trips: list[dict]) -> list[dict]:
+    """Every direct and one-transfer option from the origins to dest.
+    origins: [(station, walk minutes)]. Each option: origin, walk, line,
+    dir, board, via, line2, arrive (datetime, includes the final walk)."""
+    import bisect
+    dest_walk = {dest: 0.0, **dict(nearby_stations(dest))}
+
+    best_after = []                    # per trip: earliest (arrive, station) at dest after stop i
+    for t in trips:
+        acc, best = [None] * len(t["stops"]), None
+        for i in range(len(t["stops"]) - 1, -1, -1):
+            acc[i] = best
+            p, _, arr, _ = t["stops"][i]
+            if p in dest_walk:
+                cand = arr + timedelta(minutes=dest_walk[p])
+                if best is None or cand < best:
+                    best = cand
+        best_after.append(acc)
+
+    at_stop: dict = {}                 # station -> sorted [(depart, trip, index)]
+    for ti, t in enumerate(trips):
+        for i, (p, _, _, dep) in enumerate(t["stops"]):
+            at_stop.setdefault(p, []).append((dep, ti, i))
+    for lst in at_stop.values():
+        lst.sort(key=lambda x: x[0])
+    times = {p: [x[0] for x in lst] for p, lst in at_stop.items()}
+
+    options = []
+    for origin, walk in origins:
+        ready = now + timedelta(minutes=walk)
+        latest = ready + timedelta(minutes=ALT_MAX_WAIT_MIN)
+        lst = at_stop.get(origin, [])
+        for dep, ti, i in lst[bisect.bisect_left(times.get(origin, []), ready):]:
+            if dep > latest:
+                break
+            t = trips[ti]
+            leg = {"origin": origin, "walk": walk, "line": t["route"], "dir": t["stops"][i][1],
+                   "board": dep, "via": None, "line2": None}
+            if best_after[ti][i]:
+                options.append({**leg, "arrive": best_after[ti][i]})
+            for j in range(i + 1, len(t["stops"])):          # one transfer
+                x, _, arr_x, _ = t["stops"][j]
+                if x in dest_walk:
+                    break                                     # already there
+                for y, tt in [(x, ALT_SAME_STOP_MIN)] + nearby_stations(x):
+                    ready2 = arr_x + timedelta(minutes=tt)
+                    lst2 = at_stop.get(y, [])
+                    seen = set()
+                    for dep2, ti2, i2 in lst2[bisect.bisect_left(times.get(y, []), ready2):]:
+                        if dep2 > ready2 + timedelta(minutes=30):
+                            break
+                        t2 = trips[ti2]
+                        key = (t2["route"], t2["stops"][i2][1])
+                        if ti2 == ti or t2["route"] == t["route"] or key in seen:
+                            continue
+                        seen.add(key)                         # first train per line/direction
+                        if best_after[ti2][i2]:
+                            options.append({**leg, "alight": x, "via": y, "line2": t2["route"],
+                                            "arrive": best_after[ti2][i2]})
+    options.sort(key=lambda o: (o["arrive"], o["via"] is not None, o["board"]))
+    return options
+
+
+def _station_name(p: str, names: dict | None = None) -> str:
+    """The name the user saved for a station, else the GTFS name."""
+    return (names or {}).get(p) or static_stations().get(p, {}).get("name", p)
+
+
+def _saved_names(cfg: dict) -> dict:
+    return {cfg["stop_parent"]: cfg["stop_name"],
+            **{o["stop"]: o["name"] for o in cfg.get("alt_origins", []) if o.get("name")}}
+
+
+def describe_route(o: dict, names: dict | None = None) -> str:
+    """'From Flushing Av (leave 8:41): J to Myrtle Av, then M. Arrive 9:22'."""
+    leave = fmt_time(o["board"] - timedelta(minutes=o["walk"]))
+    text = f"From {_station_name(o['origin'], names)} (leave {leave}): {o['line']}{_transfer_text(o, names)}"
+    return f"{text}. Arrive {fmt_time(o['arrive'])}"
+
+
+def _transfer_text(o: dict, names: dict | None = None) -> str:
+    """' to 14 St-Union Sq, then 6' or, when you walk between differently
+    named stations, ' to Broadway-Lafayette St, walk to Bleecker St, then 6'."""
+    if not o["via"]:
+        return ""
+    off, on = _station_name(o.get("alight") or o["via"], names), _station_name(o["via"], names)
+    return f" to {off}, then {o['line2']}" if off == on else f" to {off}, walk to {on}, then {o['line2']}"
+
+
+_alt_cache: dict = {}
+
+
+def alt_route(cfg: dict, now: datetime) -> dict:
+    """{'usual': option|None, 'best': option|None, 'active': bool, 'saves': min}."""
+    dest = cfg.get("alt_dest") or ""
+    home = cfg["stop_parent"]
+    origins = [(home, cfg["walk_minutes"])] + [(o["stop"], o["walk"]) for o in cfg.get("alt_origins", [])
+                                               if o.get("stop") and o["stop"] != home]
+    key = (dest, tuple(origins), cfg["line"], cfg["platform"], int(now.timestamp() // ALT_TTL_S))
+    if key in _alt_cache:
+        return _alt_cache[key]
+    result = {"usual": None, "best": None, "active": False, "saves": 0}
+    if dest:
+        try:
+            options = plan_routes(origins, dest, now, live_trips())
+        except Exception:
+            log.exception("Alternate route planning failed")
+            options = []
+        usual = next((o for o in options if o["origin"] == home and o["line"] == cfg["line"]
+                      and o["dir"] == cfg["platform"]), None)
+        best = options[0] if options else None
+        saves = int((usual["arrive"] - best["arrive"]).total_seconds() // 60) if usual and best else 0
+        active = bool(best) and (usual is None or saves >= ALT_MIN_SAVE_MIN)
+        if active and usual and (best["origin"], best["line"], best["via"]) == (usual["origin"], usual["line"], usual["via"]):
+            active = False
+        result = {"usual": usual, "best": best, "active": active, "saves": saves}
+    _alt_cache.clear()
+    _alt_cache[key] = result
+    return result
+
+
+def alt_payload(cfg: dict, now: datetime) -> dict:
+    """Panel fields: alt=1 swaps the display to the faster route."""
+    if not cfg.get("alt_routes") or not cfg.get("alt_dest") or cfg["demo"]:
+        return {"alt": 0}
+    r = alt_route(cfg, now)
+    if not r["active"]:
+        return {"alt": 0}
+    b = r["best"]
+    # Short for the panel: "ALT: Flushing Av, leave 8:41. J to Myrtle Av, then M. Arr 9:22 (6 min sooner)"
+    names = _saved_names(cfg)
+    leave = fmt_time(b["board"] - timedelta(minutes=b["walk"]))
+    text = f"ALT: {_station_name(b['origin'], names)}, leave {leave}. {b['line']}{_transfer_text(b, names)}"
+    text += f". Arr {fmt_time(b['arrive'])}"
+    text += f" ({r['saves']} min sooner)" if r["usual"] else " (usual train doesn't get there)"
+    cr, cg, cb = hex_to_rgb(LINE_COLORS.get(b["line"], "#888888"))
+    return {"alt": 1, "alt_line": b["line"][:2], "alt_time": fmt_time(b["board"]),
+            "alt_r": cr, "alt_g": cg, "alt_b": cb, "alt_text": text[:140]}
+
+
 def arriving_train(feed, stop_id: str, line: str, now: datetime) -> int:
     """Id of a train pulling into stop_id right now (0 = none).
 
@@ -1315,6 +1567,7 @@ def next_trains():
         payload["error"] = payload["error"] or error2
     payload.update(occasion_payload(panel_id, cfg, now))
     payload.update(score_payload(cfg))
+    payload.update(alt_payload(cfg, now) if not payload.get("scores_only") else {"alt": 0})
     if wifi_new:
         payload["wifi_new"] = wifi_new
     return jsonify(payload)
@@ -1455,6 +1708,37 @@ def api_preview_scores():
                                 "until": int(time.time()) + (30 if kind == "win" else 20)}
         save_config(pid, cfg)
     return jsonify({"ok": True})
+
+
+@app.get("/api/all-stations")
+def api_all_stations():
+    """Every subway station with the lines running there now (for pickers)."""
+    def load():
+        lines: dict = {}
+        try:
+            for t in live_trips():
+                for p, _, _, _ in t["stops"]:
+                    lines.setdefault(p, set()).add(t["route"])
+        except Exception:
+            log.warning("Could not read live lines for the station list", exc_info=True)
+        order = {l: i for i, l in enumerate(LINES)}
+        return sorted(({"id": sid, "name": st["name"],
+                        "lines": sorted(lines.get(sid, ()), key=lambda l: order.get(l, 99))}
+                       for sid, st in static_stations().items()), key=lambda s: (s["name"], s["id"]))
+    return jsonify(cache.get(("all-stations",), STATIONS_TTL_S, load))
+
+
+@app.get("/api/alt-route")
+def api_alt_route():
+    """What the panel would suggest right now (for the web app's hint)."""
+    cfg = load_config(require_panel_id())
+    if not cfg.get("alt_dest"):
+        return jsonify({"ok": False, "reason": "no destination"})
+    r = alt_route(cfg, datetime.now(tz=EASTERN))
+    def brief(o):
+        return describe_route(o, _saved_names(cfg)) if o else None
+    return jsonify({"ok": True, "active": r["active"], "saves": r["saves"],
+                    "usual": brief(r["usual"]), "best": brief(r["best"])})
 
 
 @app.get("/api/scores")

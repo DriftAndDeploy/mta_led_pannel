@@ -723,6 +723,73 @@ class ScoresEndOfGame(unittest.TestCase):
         self.assertEqual(bad.status_code, 400)
 
 
+def trip_of(route, stops):
+    """stops: [(stop_id_with_dir, datetime)] -> live_trips() shape."""
+    return {"route": route, "stops": [(sid[:-1], sid[-1], t, t) for sid, t in stops]}
+
+
+class AltRoutes(unittest.TestCase):
+    def test_direct_ride_from_another_station_wins(self):
+        trips = [trip_of("L", [("X01N", at(10, 20)), ("X09N", at(10, 50))]),     # usual, delayed
+                 trip_of("J", [("X02S", at(10, 15)), ("X09S", at(10, 35))])]
+        opts = ps.plan_routes([("X01", 5), ("X02", 8)], "X09", at(10, 0), trips)
+        self.assertEqual([(o["origin"], o["line"], o["arrive"]) for o in opts],
+                         [("X02", "J", at(10, 35)), ("X01", "L", at(10, 50))])
+
+    def test_cannot_catch_a_train_you_cannot_walk_to(self):
+        trips = [trip_of("J", [("X02S", at(10, 5)), ("X09S", at(10, 20))])]
+        self.assertEqual(ps.plan_routes([("X02", 8)], "X09", at(10, 0), trips), [])
+
+    def test_one_transfer_at_a_nearby_station(self):
+        # L to 14 St-Union Sq (L03), walk to the 4/5/6 platforms (635), 6 onward
+        trips = [trip_of("L", [("X01N", at(10, 10)), ("L03N", at(10, 20))]),
+                 trip_of("6", [("635S", at(10, 22)), ("X50S", at(10, 30))]),       # too soon to make
+                 trip_of("6", [("635S", at(10, 25)), ("X50S", at(10, 35))])]
+        opts = ps.plan_routes([("X01", 0)], "X50", at(10, 0), trips)
+        self.assertEqual(len(opts), 1)
+        o = opts[0]
+        self.assertEqual((o["line"], o["via"], o["line2"], o["arrive"]), ("L", "635", "6", at(10, 35)))
+        self.assertIn("L to 14 St-Union Sq, then 6", ps.describe_route(o))       # same complex name
+        o2 = dict(o, alight="D21", via="637")
+        self.assertIn("to Broadway-Lafayette St, walk to Bleecker St, then 6", ps.describe_route(o2))
+
+    def test_arriving_at_the_destination_complex_counts(self):
+        trips = [trip_of("4", [("X01N", at(10, 5)), ("635N", at(10, 15))])]          # dest is L03, 67 m away
+        opts = ps.plan_routes([("X01", 0)], "L03", at(10, 0), trips)
+        self.assertEqual(len(opts), 1)
+        self.assertGreater(opts[0]["arrive"], at(10, 15))                             # includes the walk
+
+    def _payload(self, trips, cfg):
+        ps._alt_cache.clear()
+        with mock.patch.object(ps, "live_trips", return_value=trips):
+            return ps.alt_payload(cfg, at(10, 0))
+
+    def test_switches_only_when_it_saves_five_minutes(self):
+        cfg = {**ps.DEFAULT_CONFIG, "alt_routes": True, "alt_dest": "X09", "stop_parent": "X01",
+               "line": "L", "platform": "N", "walk_minutes": 5,
+               "alt_origins": [{"stop": "X02", "name": "Other St", "walk": 8}]}
+        usual = trip_of("L", [("X01N", at(10, 20)), ("X09N", at(10, 50))])
+        faster = self._payload([usual, trip_of("J", [("X02S", at(10, 15)), ("X09S", at(10, 44))])], cfg)
+        slightly = self._payload([usual, trip_of("J", [("X02S", at(10, 15)), ("X09S", at(10, 47))])], cfg)
+        off = self._payload([usual], {**cfg, "alt_routes": False})
+        self.assertEqual((faster["alt"], faster["alt_line"], faster["alt_time"]), (1, "J", "10:15"))
+        self.assertEqual(faster["alt_text"], "ALT: Other St, leave 10:07. J. Arr 10:44 (6 min sooner)")
+        self.assertEqual(slightly["alt"], 0)                                          # 3 min: not worth it
+        self.assertEqual(off, {"alt": 0})
+
+    def test_config_validation(self):
+        c = ps.app.test_client()
+        too_many = [{"stop": f"X0{i}", "name": "x", "walk": 3} for i in range(3)]
+        self.assertEqual(c.post("/api/config?panel_id=AR0001", json={"alt_origins": too_many}).status_code, 400)
+        r = c.post("/api/config?panel_id=AR0001", json={"alt_routes": True, "alt_dest": "L03",
+                    "alt_origins": [{"stop": "g29", "name": "Metropolitan Av", "walk": 99}]})
+        self.assertEqual(r.status_code, 400)                                         # lower-case id rejected
+        r = c.post("/api/config?panel_id=AR0001", json={"alt_origins": [{"stop": "G29", "walk": 99}]})
+        self.assertEqual(r.get_json()["config"]["alt_origins"], [{"stop": "G29", "name": "G29", "walk": 60}])
+        self.assertEqual(ps.base_line("6X"), "6")
+        self.assertEqual(ps.base_line("SI"), "SI")
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

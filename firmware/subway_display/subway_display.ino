@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.4.0"
-#define FW_BUILD   740
+#define FW_VERSION "7.5.0"
+#define FW_BUILD   750
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -102,6 +102,12 @@ struct PanelState {
   uint8_t  occasion       = 0;      // OCC_* holiday/season animation (0 = none)
   char     occasion_label[24] = "";
   uint32_t occasion_seq   = 0;      // changes -> play now (previews)
+  // Faster route (Alternate Routes on, and it saves 5+ min)
+  bool     alt            = false;
+  char     alt_line[4]    = "";
+  char     alt_time[8]    = "";
+  uint8_t  alt_r = 167, alt_g = 169, alt_b = 172;
+  char     alt_text[144]  = "";     // "Faster route: From Flushing Av (leave 8:41): J ..."
   // Scores-only mode (Live Scores on): one game, chosen by the server
   bool     scores_only    = false;  // show games instead of trains
   bool     score_on       = false;  // false: show score_msg instead of a game
@@ -178,6 +184,7 @@ void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8
 uint16_t textColor(const PanelState& s, uint16_t normal);
 void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
 void drawScores(const PanelState& s, bool stale);
+void drawAlt(const PanelState& s);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -624,6 +631,11 @@ bool fetchTrainTimes() {
   n.occasion       = doc["occasion"] | 0;
   copyStr(n.occasion_label, sizeof(n.occasion_label), doc["occasion_label"] | "");
   n.occasion_seq   = doc["occasion_seq"] | 0u;
+  n.alt            = (doc["alt"] | 0) != 0;
+  copyStr(n.alt_line, sizeof(n.alt_line), doc["alt_line"] | "");
+  copyStr(n.alt_time, sizeof(n.alt_time), doc["alt_time"] | "");
+  n.alt_r = doc["alt_r"] | 167; n.alt_g = doc["alt_g"] | 169; n.alt_b = doc["alt_b"] | 172;
+  copyStr(n.alt_text, sizeof(n.alt_text), doc["alt_text"] | "");
   n.scores_only    = (doc["scores_only"] | 0) != 0;
   n.score_on       = (doc["score_on"] | 0) != 0;
   n.score_final    = (doc["score_final"] | 0) != 0;
@@ -727,6 +739,7 @@ void render(const PanelState& in) {
     copyStr(s.train_time2, sizeof(s.train_time2), "--:--");
     s.leave_by[0] = '\0';
     s.wx_show = false;
+    s.alt = false;            // never suggest a route from stale data
   }
 
   // Latch blanking is baked into the panel's timing data when brightness is
@@ -825,7 +838,8 @@ void render(const PanelState& in) {
   }
 
   dma_display->clearScreen();
-  if (s.dual)            drawDual(s);
+  if (s.alt)             drawAlt(s);
+  else if (s.dual)       drawDual(s);
   else if (s.minimalist) drawMinimalist(s);
   else                   drawNormal(s);
   present();
@@ -1425,6 +1439,19 @@ static void drawScoreDigits(const char* t, int cx, uint16_t c) {
   dma_display->setTextColor(c);
   for (int i = 0; i < n; i++) { dma_display->setCursor(x + i * adv, 9); dma_display->write(t[i]); }
   dma_display->setTextSize(1);
+}
+
+// Faster-route screen (replaces the usual layout while it saves 5+ min):
+//   [J] 8:47              <- bullet of the train to take + when it leaves
+//   Faster route: From Flushing Av (leave 8:41): J to Myrtle Av, then M ...
+void drawAlt(const PanelState& s) {
+  static int alt_scroll = PANEL_RES_X;
+  drawBullet(6, 9, 6, s.alt_line, s.alt_r, s.alt_g, s.alt_b);
+  drawBigTime(max(14, 60 - bigTimeWidth(s.alt_time)), 2, s.alt_time,
+              dma_display->color565(s.time_r, s.time_g, s.time_b));
+  int end = drawRun(s.alt_text, alt_scroll, 21, textColor(s, dma_display->color565(230, 190, 60)));
+  alt_scroll--;
+  if (end < 0) alt_scroll = PANEL_RES_X;              // whole message has passed
 }
 
 // Scores-only screen. A game: the card above; a just-won game: confetti in
