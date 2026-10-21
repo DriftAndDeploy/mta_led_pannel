@@ -126,6 +126,11 @@
     margin-bottom: 14px;
   }
 
+  .station-route {
+    font-size: 10px; letter-spacing: 1px; color: var(--muted);
+    margin: -4px 0 8px; min-height: 12px;
+  }
+
   /* Service-alert ticker under the platform buttons */
   .alert-ticker {
     display: none;
@@ -1072,6 +1077,7 @@
   <div class="section-label">02 — Select Station <span class="train-tag"></span></div>
   <input class="station-search" id="station-search" placeholder="Search stations..." type="text"
          autocomplete="off" oninput="renderStations()">
+  <div class="station-route" id="station-route"></div>
   <div class="station-list" id="station-list">
     <div class="station-empty">Select a line above</div>
   </div>
@@ -1782,6 +1788,9 @@ async function loadStations(line, preselectId) {
   }
   if (req !== stationsReq) return;   // user picked another line/train meanwhile
   allStations = stations;
+  // Stations come back in the order the train runs; say which way.
+  document.getElementById('station-route').textContent = stations.length > 1
+    ? `In route order: ${stations[0].name} → ${stations[stations.length - 1].name}` : '';
   if (preselectId) {
     selectedStation = allStations.find(s => s.id === preselectId) || selectedStation;
   }

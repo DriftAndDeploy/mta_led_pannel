@@ -429,19 +429,65 @@ def next_departure(feed, stop_id: str, line: str, walk_minutes: int, now: dateti
     return soonest
 
 
+def order_stops(sequences: list[list[str]]) -> list[str]:
+    """Merge stop sequences from many trips into one route order.
+
+    Each trip says "this stop comes before that one"; a topological sort
+    of all of those gives an order every trip agrees with, so local stops
+    land between express ones and partial trips fit in. Where the trips
+    don't decide (e.g. two branches), it keeps following the branch it is
+    on, then falls back to the MTA stop ID, which is numbered in route
+    order within each trunk (L01 8 Av ... L29 Canarsie).
+    """
+    seqs = [s for s in sequences if s]
+    nodes = list(dict.fromkeys(sid for s in seqs for sid in s))
+    succ = {n: set() for n in nodes}
+    indeg = dict.fromkeys(nodes, 0)
+    for seq in seqs:
+        for a, b in zip(seq, seq[1:]):
+            if a != b and b not in succ[a]:
+                succ[a].add(b)
+                indeg[b] += 1
+    order, remaining = [], set(nodes)
+    ready = [n for n in nodes if indeg[n] == 0]
+    while remaining:
+        if ready:
+            follow = [n for n in ready if order and n in succ[order[-1]]]
+            n = min(follow or ready)
+        else:                                   # conflicting trips: break the loop
+            n = min(remaining, key=lambda x: (indeg[x], x))
+        ready = [r for r in ready if r != n]
+        remaining.discard(n)
+        order.append(n)
+        for m in succ[n]:
+            if m in remaining:
+                indeg[m] -= 1
+                if indeg[m] == 0:
+                    ready.append(m)
+    return order
+
+
 def get_stations(line: str) -> list[dict]:
-    """Stations with live trips on this line, alphabetical."""
+    """Stations with live trips on this line, in the order the train runs
+    (the S direction: top of the map to the bottom, e.g. 8 Av -> Canarsie)."""
     def load():
-        stations = {}
+        names, south, north = {}, [], []
         for trip in get_feed(line).filter_trips(line_id=line):
+            seq, direction = [], None
             for update in trip.stop_time_updates:
                 sid = update.stop_id or ""
                 parent = sid[:-1] if sid[-1:] in ("N", "S") else sid
-                if parent and parent not in stations:
-                    name = (getattr(update, "stop_name", None) or parent).strip()
-                    stations[parent] = name
-        return sorted(({"id": k, "name": v} for k, v in stations.items()),
-                      key=lambda s: s["name"])
+                if not parent:
+                    continue
+                direction = direction or sid[-1:]
+                if parent not in names:
+                    names[parent] = (getattr(update, "stop_name", None) or parent).strip()
+                if not seq or seq[-1] != parent:
+                    seq.append(parent)
+            (north if direction == "N" else south).append(seq)
+        # S-bound trips give the order; N-bound ones (reversed) fill any gaps.
+        order = order_stops(south + [list(reversed(s)) for s in north])
+        return [{"id": sid, "name": names[sid]} for sid in order]
 
     return cache.get(("stations", line), STATIONS_TTL_S, load)
 

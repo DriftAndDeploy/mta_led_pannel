@@ -533,6 +533,33 @@ class PlatformAlerts(unittest.TestCase):
             self.assertEqual(c.get("/api/alerts?line=L&stop=L14&platform=N").get_json()["ok"], False)
 
 
+class StationOrder(unittest.TestCase):
+    def test_merges_locals_branches_and_partial_trips(self):
+        order = ps.order_stops([
+            ["A1", "A3", "A5", "A6", "L1", "L2"],         # express trip to branch L
+            ["A1", "A2", "A3", "A4", "A5"],               # local trip (short)
+            ["A5", "A6", "R1", "R2", "R3"],               # trip on branch R, already under way
+        ])
+        self.assertEqual(order, ["A1", "A2", "A3", "A4", "A5", "A6", "L1", "L2", "R1", "R2", "R3"])
+
+    def test_conflicting_trips_still_return_every_stop(self):
+        order = ps.order_stops([["A", "B", "C"], ["C", "B"]])
+        self.assertEqual(sorted(order), ["A", "B", "C"])
+
+    def test_get_stations_in_route_order(self):
+        def trip(stops):
+            return SimpleNamespace(stop_time_updates=[SimpleNamespace(stop_id=s, stop_name=n)
+                                                      for s, n in stops])
+        trips = [
+            trip([("L06S", "1 Av"), ("L08S", "Bedford Av"), ("L10S", "Lorimer St"), ("L14S", "Morgan Av")]),
+            trip([("L29N", "Canarsie"), ("L14N", "Morgan Av"), ("L10N", "Lorimer St"), ("L01N", "8 Av")]),
+        ]
+        ps.cache._data.clear()
+        with mock.patch.object(ps, "get_feed", return_value=SimpleNamespace(filter_trips=lambda line_id: trips)):
+            names = [s["name"] for s in ps.get_stations("L")]
+        self.assertEqual(names, ["8 Av", "1 Av", "Bedford Av", "Lorimer St", "Morgan Av", "Canarsie"])
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()
