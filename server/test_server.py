@@ -560,6 +560,37 @@ class StationOrder(unittest.TestCase):
         self.assertEqual(names, ["8 Av", "1 Av", "Bedford Av", "Lorimer St", "Morgan Av", "Canarsie"])
 
 
+class AlertFeedParsing(unittest.TestCase):
+    def test_headline_for_panel_and_description_for_web_app(self):
+        from nyct_gtfs.compiled_gtfs import gtfs_realtime_pb2 as rt
+        feed = rt.FeedMessage()
+        feed.header.gtfs_realtime_version = "2.0"
+        e = feed.entity.add(id="a1")
+        e.alert.informed_entity.add(route_id="L")
+        e.alert.header_text.translation.add(
+            text="Northbound [L] trains are running with delays after we addressed a mechanical "
+                 "problem on a train at Lorimer St.", language="en")
+        e.alert.header_text.translation.add(text="<p>html</p>", language="en-html")
+        e.alert.description_text.translation.add(
+            text="What's happening?\nWe're fixing a train.\n\nTravel alternatives: [accessibility icon] "
+                 "Take the [G] to Court Sq.", language="en")
+        resp = mock.Mock(content=feed.SerializeToString(), raise_for_status=lambda: None)
+        ps.cache._data.clear()
+        with mock.patch.object(ps.requests, "get", return_value=resp):
+            alerts = ps.get_alerts()
+            web = ps.alerts_for_platform("L", "L10", "N", 1000)
+        self.assertEqual(alerts[0]["text"], "N/B L trains are delayed after a mech problem on a train at Lorimer St.")
+        self.assertEqual(web[0]["text"], "Northbound L trains are running with delays after we addressed "
+                                         "a mechanical problem on a train at Lorimer St.")
+        self.assertEqual(web[0]["detail"], "What's happening? We're fixing a train. Travel alternatives: "
+                                           "Take the G to Court Sq.")
+
+    def test_long_description_is_trimmed(self):
+        out = ps.shorten_words("word " * 300, ps.ALERT_DETAIL_LIMIT)
+        self.assertLessEqual(len(out), ps.ALERT_DETAIL_LIMIT)
+        self.assertTrue(out.endswith("…"))
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

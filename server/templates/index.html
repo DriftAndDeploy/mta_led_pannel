@@ -158,6 +158,7 @@
   }
   .alert-ticker.good .alert-track { padding-left: 0; animation: none; }
   .alert-sep { color: var(--muted); margin: 0 14px; }
+  .alert-detail { opacity: .78; }
   @keyframes alert-scroll { to { transform: translateX(-100%); } }
   @media (prefers-reduced-motion: reduce) {
     .alert-ticker { white-space: normal; padding: 9px 12px; -webkit-mask-image: none; mask-image: none; }
@@ -2291,13 +2292,16 @@ async function refreshAlerts(force = false) {
     box.classList.add('show', 'good');
     return;
   }
-  track.innerHTML = data.alerts.map(a => escapeHtml(a.text)).join('<span class="alert-sep">•</span>');
+  // Headline, then the MTA's longer description (the panel only gets a condensed headline).
+  track.innerHTML = data.alerts.map(a => escapeHtml(a.text) +
+      (a.detail ? ` <span class="alert-detail">— ${escapeHtml(a.detail)}</span>` : ''))
+    .join('<span class="alert-sep">•</span>');
   box.classList.toggle('severe', data.alerts.some(a => a.level >= 2));
   box.classList.add('show');
-  // Constant reading speed (~45 px/s) however long the alerts are.
+  // Constant reading speed (~75 px/s) however long the alerts are.
   requestAnimationFrame(() => {
     const px = track.scrollWidth;
-    track.style.setProperty('--dur', `${Math.max(8, px / 45).toFixed(1)}s`);
+    track.style.setProperty('--dur', `${Math.max(6, px / 75).toFixed(1)}s`);
     track.style.animation = 'none'; void track.offsetWidth; track.style.animation = '';   // restart
   });
 }

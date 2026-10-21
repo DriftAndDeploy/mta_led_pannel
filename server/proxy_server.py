@@ -594,6 +594,22 @@ def classify_alert(text: str) -> int:
     return 2 if _SUSPENDED_RE.search(text) else 1
 
 
+ALERT_DETAIL_LIMIT = 600   # web app ticker: keep one scroll pass reasonable
+
+
+def _english(translations) -> str:
+    """Plain English text from a GTFS-RT TranslatedString ("" if none)."""
+    if not translations:
+        return ""
+    return next((t.text for t in translations if t.language in ("en", "")), translations[0].text)
+
+
+def shorten_words(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit - 1].rsplit(" ", 1)[0].rstrip(",;:-") + "…"
+
+
 def get_alerts() -> list[dict]:
     """All subway alerts, parsed once per minute and shared by every panel."""
     def load():
@@ -609,17 +625,22 @@ def get_alerts() -> list[dict]:
             tr = a.header_text.translation or a.description_text.translation
             if not tr:
                 continue
-            # Prefer the plain English translation over the HTML one.
-            raw = next((t.text for t in tr if t.language in ("en", "")), tr[0].text)
-            full = normalize_alert_text(raw)
+            full = normalize_alert_text(_english(tr))
             if not full:
                 continue
+            # The longer description ("What's happening", alternatives, ...)
+            # is only shown in the web app.
+            detail = normalize_alert_text(_english(a.description_text.translation))
+            if detail.lower().startswith(full.lower().rstrip(".")):
+                detail = detail[len(full):].lstrip(" .")
+            detail = shorten_words(detail, ALERT_DETAIL_LIMIT)
             alerts.append({
                 "routes":  {ie.route_id for ie in a.informed_entity if ie.route_id},
                 "stops":   {ie.stop_id for ie in a.informed_entity if ie.stop_id},
                 "periods": [(p.start or 0, p.end or 0) for p in a.active_period],
                 "text":    condense_alert_text(full),   # for the panel
                 "full":    full,                        # for the web app
+                "detail":  detail,                      # web app: MTA's longer description
                 "level":   classify_alert(full),   # judged on the full wording
             })
         return alerts
@@ -660,13 +681,13 @@ def alerts_for_platform(line: str, stop_parent: str, platform: str, now_ts: floa
         if dirs and platform not in dirs:
             continue
         here = any(sid.startswith(stop_parent) for sid in a.get("stops", ()))
-        out.append((a["level"], here, a.get("full", a["text"])))
+        out.append((a["level"], here, a.get("full", a["text"]), a.get("detail", "")))
     out.sort(key=lambda x: (-x[0], not x[1]))
     seen, alerts = set(), []
-    for level, here, text in out:
+    for level, here, text, detail in out:
         if text not in seen:          # the MTA sometimes repeats an alert per route
             seen.add(text)
-            alerts.append({"text": text, "level": level})
+            alerts.append({"text": text, "detail": detail, "level": level})
     return alerts
 
 
