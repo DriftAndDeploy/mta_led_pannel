@@ -649,10 +649,11 @@ class LiveScores(unittest.TestCase):
             b = ps.score_payload(cfg)
             nba_only = ps.score_payload({**cfg, "scores_mlb": False})
             off = ps.score_payload({**cfg, "show_scores": False})
-        self.assertEqual((a["away_abbr"], a["away_score"], a["home_abbr"], a["score_status"]), ("NYY", 3, "TOR", "TOP 5TH"))
+        self.assertEqual((a["scores_only"], a["away_abbr"], a["away_score"], a["home_abbr"], a["score_status"]),
+                         (1, "NYY", 3, "TOR", "TOP 5TH"))
         self.assertEqual((b["away_abbr"], b["home_abbr"], b["home_score"]), ("MIA", "NY", 61))
         self.assertEqual(nba_only["home_abbr"], "NY")
-        self.assertEqual(off, {"score_on": 0})
+        self.assertEqual(off, {"scores_only": 0, "score_on": 0})
 
     def test_no_ny_game_shows_closest_and_outage_is_quiet(self):
         cfg = {**ps.DEFAULT_CONFIG, "show_scores": True, "scores_mlb": False}
@@ -662,7 +663,64 @@ class LiveScores(unittest.TestCase):
             self.assertEqual(ps.score_payload(cfg)["away_abbr"], "BOS")
         ps.cache._data.clear()
         with mock.patch.object(ps.requests, "get", side_effect=ps.requests.Timeout()):
-            self.assertEqual(ps.score_payload(cfg), {"score_on": 0})
+            p = ps.score_payload(cfg)
+        self.assertEqual((p["scores_only"], p["score_on"], p["score_msg"]), (1, 0, "NO GAMES TODAY"))
+
+
+class ScoresEndOfGame(unittest.TestCase):
+    def setUp(self):
+        ps.cache._data.clear(); ps._scores_failed.clear(); ps._seen_live.clear(); ps._ended.clear()
+
+    def board(self, state, nyy, opp, detail="Top 9th"):
+        return {"events": [espn_event("77", state, detail, ("NYY", "New York", nyy, "003087", "e4002c"),
+                                      ("BOS", "Boston", opp, "bd3039", "0c2340"))]}
+
+    def run_at(self, t, board, cfg):
+        resp = mock.Mock(json=lambda: board, raise_for_status=lambda: None)
+        ps.cache._data.clear()
+        with mock.patch.object(ps.requests, "get", return_value=resp), \
+             mock.patch.object(ps.time, "time", return_value=t):
+            return ps.score_payload(cfg)
+
+    def test_win_celebrates_for_five_minutes(self):
+        cfg = {**ps.DEFAULT_CONFIG, "show_scores": True, "scores_nba": False}
+        live = self.run_at(1000, self.board("in", 5, 3), cfg)
+        final = self.run_at(1030, self.board("post", 6, 3, "Final"), cfg)
+        later = self.run_at(1030 + ps.WIN_SHOW_S + 1, self.board("post", 6, 3, "Final"), cfg)
+        self.assertEqual((live["score_final"], live["score_win"]), (0, 0))
+        self.assertEqual((final["score_final"], final["score_win"], final["score_status"]), (1, 1, "FINAL"))
+        self.assertEqual((later["score_on"], later["score_msg"]), (0, "NO LIVE GAMES"))
+
+    def test_ny_loss_shows_final_without_celebration(self):
+        cfg = {**ps.DEFAULT_CONFIG, "show_scores": True, "scores_nba": False}
+        self.run_at(1000, self.board("in", 2, 3), cfg)
+        final = self.run_at(1030, self.board("post", 2, 4, "Final"), cfg)
+        self.assertEqual((final["score_final"], final["score_win"]), (1, 0))
+
+    def test_game_already_over_when_first_seen_is_not_celebrated(self):
+        cfg = {**ps.DEFAULT_CONFIG, "show_scores": True, "scores_nba": False}
+        p = self.run_at(1000, self.board("post", 6, 3, "Final"), cfg)
+        self.assertEqual(p["score_on"], 0)
+
+    def test_next_game_message(self):
+        cfg = {**ps.DEFAULT_CONFIG, "show_scores": True, "scores_nba": False}
+        p = self.run_at(1000, self.board("pre", 0, 0, "10/21 - 7:08 PM EDT"), cfg)
+        self.assertEqual(p["score_msg"], "NEXT NYY 7:08P")
+
+    def test_previews(self):
+        c = ps.app.test_client()
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)):
+            self.assertEqual(c.get("/next-trains?panel_id=PS0001").get_json()["scores_only"], 0)
+            c.post("/api/preview-scores?panel_id=PS0001", json={"kind": "win"})
+            win = c.get("/next-trains?panel_id=PS0001").get_json()
+            c.post("/api/preview-scores?panel_id=PS0001", json={"kind": "live"})
+            live = c.get("/next-trains?panel_id=PS0001").get_json()
+            bad = c.post("/api/preview-scores?panel_id=PS0001", json={"kind": "tie"})
+        self.assertEqual((win["scores_only"], win["score_final"], win["score_win"], win["home_abbr"]), (1, 1, 2, "NY"))
+        self.assertEqual((live["score_final"], live["away_abbr"]), (0, "NYY"))
+        self.assertNotEqual(win["score_seq"], live["score_seq"])
+        self.assertEqual(bad.status_code, 400)
 
 
 class Firmware(unittest.TestCase):

@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.1.0"
-#define FW_BUILD   710
+#define FW_VERSION "7.2.0"
+#define FW_BUILD   720
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -61,8 +61,6 @@ const uint32_t ID_SPLASH_MS      = 15000;   // Panel ID screen on power-up
 const uint32_t ARRIVAL_ANIM_MS   = 4300;    // arriving-train animation length
 const uint32_t OCCASION_MS       = 10000;   // holiday/season animation length...
 const uint32_t OCCASION_EVERY_MS = 600000;  // ...played every 10 minutes
-const uint32_t SCORE_MS          = 6000;    // live-score card length...
-const uint32_t SCORE_EVERY_MS    = 120000;  // ...shown every 2 minutes during a game
 const uint32_t HTTP_TIMEOUT_MS   = 8000;
 
 // Panel driving. latch_blanking hides the "ghost" glow / faint lines that
@@ -104,8 +102,12 @@ struct PanelState {
   uint8_t  occasion       = 0;      // OCC_* holiday/season animation (0 = none)
   char     occasion_label[24] = "";
   uint32_t occasion_seq   = 0;      // changes -> play now (previews)
-  // Live score card (one game, chosen by the server)
-  bool     score_on       = false;
+  // Scores-only mode (Live Scores on): one game, chosen by the server
+  bool     scores_only    = false;  // show games instead of trains
+  bool     score_on       = false;  // false: show score_msg instead of a game
+  bool     score_final    = false;
+  uint8_t  score_win      = 0;      // 1 away / 2 home won -> celebrate
+  char     score_msg[16]  = "";
   char     away_abbr[5]   = "", home_abbr[5] = "";
   int16_t  away_score     = 0, home_score = 0;
   uint8_t  away_r = 200, away_g = 200, away_b = 200, home_r = 200, home_g = 200, home_b = 200;
@@ -175,7 +177,7 @@ void drawDual(const PanelState& s);
 void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8_t b, uint16_t textColor);
 uint16_t textColor(const PanelState& s, uint16_t normal);
 void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
-void drawScoreCard(const PanelState& s);
+void drawScores(const PanelState& s, bool stale);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -622,7 +624,11 @@ bool fetchTrainTimes() {
   n.occasion       = doc["occasion"] | 0;
   copyStr(n.occasion_label, sizeof(n.occasion_label), doc["occasion_label"] | "");
   n.occasion_seq   = doc["occasion_seq"] | 0u;
+  n.scores_only    = (doc["scores_only"] | 0) != 0;
   n.score_on       = (doc["score_on"] | 0) != 0;
+  n.score_final    = (doc["score_final"] | 0) != 0;
+  n.score_win      = doc["score_win"] | 0;
+  copyStr(n.score_msg, sizeof(n.score_msg), doc["score_msg"] | "");
   copyStr(n.away_abbr, sizeof(n.away_abbr), doc["away_abbr"] | "");
   copyStr(n.home_abbr, sizeof(n.home_abbr), doc["home_abbr"] | "");
   n.away_score     = doc["away_score"] | 0;
@@ -749,15 +755,19 @@ void render(const PanelState& in) {
     return;
   }
 
+  // Scores-only mode: games instead of trains.
+  if (s.scores_only) {
+    drawScores(s, millis() - s.updated_ms > STALE_MS);
+    return;
+  }
+
   // Arriving-train animation: once per train id, only on fresh data.
   static uint32_t played1 = 0, played2 = 0, anim_start = 0;
   static uint8_t  anim_train = 0;   // 0 none, 1 = train 1, 2 = train 2
   static uint32_t occ_played = 0, occ_last = 0, occ_start = 0;
   static bool     occ_on = false;
-  static uint32_t sc_played = 0, sc_last = 0, sc_start = 0;
-  static bool     sc_on = false;
   bool fresh = millis() - s.updated_ms < 30000;
-  if (!anim_train && !occ_on && !sc_on && fresh) {
+  if (!anim_train && !occ_on && fresh) {
     if (s.arriving && s.arriving != played1) {
       played1 = s.arriving; anim_train = 1; anim_start = millis();
     } else if (s.dual && s.arriving2 && s.arriving2 != played2) {
@@ -777,7 +787,7 @@ void render(const PanelState& in) {
 
   // Holiday / season animation: right away when the sequence changes (new
   // day or a preview), then every 10 minutes while the server sends one.
-  if (!anim_train && !occ_on && !sc_on && fresh && s.occasion) {
+  if (!anim_train && !occ_on && fresh && s.occasion) {
     if (s.occasion_seq != occ_played || millis() - occ_last >= OCCASION_EVERY_MS) {
       occ_on = true;
       occ_start = millis();
@@ -792,23 +802,6 @@ void render(const PanelState& in) {
     }
     occ_on = false;
     occ_last = millis();
-  }
-
-  // Live score card: when a new game comes up, then every 2 minutes.
-  if (!anim_train && !occ_on && !sc_on && fresh && s.score_on) {
-    if (s.score_seq != sc_played || millis() - sc_last >= SCORE_EVERY_MS) {
-      sc_on = true;
-      sc_start = millis();
-      sc_played = s.score_seq;
-    }
-  }
-  if (sc_on) {
-    if (millis() - sc_start < SCORE_MS && s.score_on) {
-      drawScoreCard(s);
-      return;
-    }
-    sc_on = false;
-    sc_last = millis();
   }
 
   // Rebuild the ticker text only when new data arrives.
@@ -887,7 +880,8 @@ void drawNormal(const PanelState& s) {
 void drawMinimalist(const PanelState& s) {
   const int GAP = 5;
   bool weather   = s.wx_show && wx_part[0];
-  int cy         = weather ? 13 : 16;   // logo centre row
+  bool ticker    = leave_part[0] || alert_part[0];   // leave-by / alerts, if turned on
+  int cy         = (weather || ticker) ? 13 : 16;   // logo centre row
   int timeWidth  = strlen(s.train_time) * 6;
   int totalWidth = 14 + GAP + timeWidth;
   int startX     = (PANEL_RES_X - totalWidth) / 2;
@@ -899,7 +893,16 @@ void drawMinimalist(const PanelState& s) {
   dma_display->setCursor(startX + 14 + GAP, cy - 4);
   dma_display->print(s.train_time);
 
-  if (weather) drawRun(wx_part, (PANEL_RES_X - runWidth(wx_part)) / 2, 24, textColor(s, WX_TEXT_COLOR));
+  if (ticker) {           // scrolls along the bottom: leave by, weather, alert
+    int cx = scroll_x;
+    cx = drawRun(leave_part, cx, 24, textColor(s, dma_display->color565(255, 255, 255)));
+    if (weather) cx = drawRun(wx_part, cx, 24, textColor(s, WX_TEXT_COLOR)) + 12;
+    cx = drawRun(alert_part, cx, 24, textColor(s, dma_display->color565(255, 220, 0)));
+    scroll_x--;
+    if (cx < 0) scroll_x = PANEL_RES_X;
+  } else if (weather) {
+    drawRun(wx_part, (PANEL_RES_X - runWidth(wx_part)) / 2, 24, textColor(s, WX_TEXT_COLOR));
+  }
 
   drawStatusDot(s.service_status);
 }
@@ -1412,20 +1415,81 @@ static void centerText(const char* t, int cx, int y, uint16_t c) {
   dma_display->print(t);
 }
 
-void drawScoreCard(const PanelState& s) {
+// Big score centred on cx. Three-digit scores (basketball) drop the letter
+// spacing so the two halves keep a gap between them.
+static void drawScoreDigits(const char* t, int cx, uint16_t c) {
+  int n = strlen(t), adv = n >= 3 ? 10 : 11;
+  int w = n * adv - (adv - 10);
+  int x = cx - w / 2;
+  dma_display->setTextSize(2);
+  dma_display->setTextColor(c);
+  for (int i = 0; i < n; i++) { dma_display->setCursor(x + i * adv, 9); dma_display->write(t[i]); }
+  dma_display->setTextSize(1);
+}
+
+// Scores-only screen. A game: the card above; a just-won game: confetti in
+// the winner's colours, the winner's abbreviation flashing and "NYY WIN!";
+// no game: "SCORES" and the server's message (e.g. NEXT / NYK 7:30P).
+void drawScores(const PanelState& s, bool stale) {
   dma_display->clearScreen();
+  uint32_t now = millis();
+  if (stale || !s.score_on) {
+    centerText("SCORES", 32, 2, dma_display->color565(142, 203, 255));
+    const char* msg = stale ? "NO DATA" : s.score_msg;
+    uint16_t c = textColor(s, dma_display->color565(230, 190, 60));
+    if (!strncmp(msg, "NEXT ", 5)) {
+      centerText("NEXT GAME", 32, 13, dma_display->color565(120, 120, 120));
+      centerText(msg + 5, 32, 23, c);
+    } else if (strlen(msg) > 10 && strchr(msg, ' ')) {    // too wide: two lines
+      char line[16];
+      copyStr(line, sizeof(line), msg);
+      char* sp = strrchr(line, ' ');
+      *sp = '\0';
+      centerText(line, 32, 13, c);
+      centerText(sp + 1, 32, 23, c);
+    } else {
+      centerText(msg, 32, 17, c);
+    }
+    present();
+    return;
+  }
+
+  bool win = s.score_final && s.score_win;
+  uint8_t wr = s.score_win == 1 ? s.away_r : s.home_r;
+  uint8_t wg = s.score_win == 1 ? s.away_g : s.home_g;
+  uint8_t wb = s.score_win == 1 ? s.away_b : s.home_b;
+  if (win) {                                       // confetti behind everything
+    for (int i = 0; i < 44; i++) {
+      uint32_t h = hsh(i * 0x9E3779B9U + 4242);
+      float speed = 9 + h % 10;
+      int y = (int)((h >> 8) % 36 + now * speed / 1000.0f) % 36 - 2;
+      int x = (int)((h >> 16) % 66) - 1 + lroundf(sinf(now / 500.0f + i) * 1.5f);
+      uint16_t c = (h & 3) == 0 ? rgb(255, 210, 60) : (h & 3) == 1 ? rgb(230, 230, 230) : rgb(wr, wg, wb);
+      px(x, y, c);
+      if (h & 4) px(x + 1, y, c);
+    }
+  }
+  bool flash = win && ((now / 300) & 1);
   char a[6], h[6];
   snprintf(a, sizeof(a), "%d", s.away_score);
   snprintf(h, sizeof(h), "%d", s.home_score);
-  centerText(s.away_abbr, 16, 1, dma_display->color565(s.away_r, s.away_g, s.away_b));
-  centerText(s.home_abbr, 48, 1, dma_display->color565(s.home_r, s.home_g, s.home_b));
+  auto teamColor = [&](uint8_t r, uint8_t g, uint8_t b, bool winner) {
+    return (winner && flash) ? dma_display->color565(255, 255, 255) : dma_display->color565(r, g, b);
+  };
+  centerText(s.away_abbr, 16, 1, teamColor(s.away_r, s.away_g, s.away_b, s.score_win == 1));
+  centerText(s.home_abbr, 48, 1, teamColor(s.home_r, s.home_g, s.home_b, s.score_win == 2));
   uint16_t digits = textColor(s, dma_display->color565(255, 255, 255));
-  int aw = bigTimeWidth(a), hw = bigTimeWidth(h);
-  drawBigTime(max(0, 16 - aw / 2), 9, a, digits);
-  drawBigTime(min(PANEL_RES_X - hw, 48 - hw / 2), 9, h, digits);
+  drawScoreDigits(a, 16, digits);
+  drawScoreDigits(h, 48, digits);
   if (strlen(a) < 3 && strlen(h) < 3)                       // dash between short scores
     dma_display->fillRect(30, 15, 4, 2, dma_display->color565(90, 90, 90));
-  centerText(s.score_status, 32, 24, textColor(s, dma_display->color565(230, 190, 60)));
+  if (win) {
+    char msg[12];
+    snprintf(msg, sizeof(msg), "%s WIN!", s.score_win == 1 ? s.away_abbr : s.home_abbr);
+    centerText(msg, 32, 24, flash ? dma_display->color565(255, 230, 120) : dma_display->color565(wr, wg, wb));
+  } else {
+    centerText(s.score_status, 32, 24, textColor(s, dma_display->color565(230, 190, 60)));
+  }
   present();
 }
 

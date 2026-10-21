@@ -68,7 +68,8 @@ ARRIVING_WINDOW_S = 60     # a train due within this many seconds is "arriving"
 SCORES_URL       = "https://site.api.espn.com/apis/site/v2/sports/{}/scoreboard"
 SCORES_LEAGUES   = {"mlb": "baseball/mlb", "nba": "basketball/nba"}
 SCORES_TTL_S     = 30      # live scores refresh
-SCORES_ROTATE_S  = 120     # with several games, the panel's card moves to the next one this often
+SCORES_ROTATE_S  = 20      # with several games, the panel moves to the next one this often
+WIN_SHOW_S       = 300     # after a game ends, show the final (and celebrate a win) this long
 NY_LOCATIONS     = {"New York", "Brooklyn"}   # Yankees, Mets, Knicks, Nets
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -1044,16 +1045,20 @@ def parse_scoreboard(data: dict, league: str) -> list[dict]:
         if "home" not in teams or "away" not in teams:
             continue
         games.append({"id": str(ev.get("id")), "league": league, "state": st.get("state"),
+                      "when": st.get("shortDetail") or "",
                       "detail": short_status(st.get("shortDetail")),
                       "away": teams["away"], "home": teams["home"]})
     return games
 
 
 _scores_failed: dict = {}
+_seen_live: set = set()          # game ids we've seen in progress
+_ended: dict = {}                # game id -> (time it ended, final game)
 
 
-def live_games(leagues: list[str]) -> list[dict]:
-    """Games in progress, New York teams first, then the closest games."""
+def scoreboards(leagues: list[str]) -> list[dict]:
+    """Today's games for these leagues (all states). Also notes when a game
+    we saw in progress goes final, for the 5-minute win celebration."""
     games = []
     for lg in leagues:
         key = ("scores", lg)
@@ -1070,34 +1075,105 @@ def live_games(leagues: list[str]) -> list[dict]:
                 log.warning("Scores unavailable (%s)", lg, exc_info=True)
                 _scores_failed[key] = time.monotonic()
                 board = []
-        games += [g for g in board if g["state"] == "in"]
-    ny = [g for g in games if g["away"]["ny"] or g["home"]["ny"]]
-    rest = sorted((g for g in games if g not in ny),
+        games += board
+    now = time.time()
+    for g in games:
+        if g["state"] == "in":
+            _seen_live.add(g["id"])
+        elif g["state"] == "post" and g["id"] in _seen_live and g["id"] not in _ended:
+            _ended[g["id"]] = (now, g)
+    for gid, (t, _) in list(_ended.items()):
+        if now - t > 6 * 3600:
+            del _ended[gid]
+    return games
+
+
+def _ny(g: dict) -> bool:
+    return g["away"]["ny"] or g["home"]["ny"]
+
+
+def live_games(leagues: list[str]) -> list[dict]:
+    """Games in progress, New York teams first, then the closest games."""
+    games = [g for g in scoreboards(leagues) if g["state"] == "in"]
+    ny = [g for g in games if _ny(g)]
+    rest = sorted((g for g in games if not _ny(g)),
                   key=lambda g: abs(g["away"]["score"] - g["home"]["score"]))
     return ny + rest
 
 
-def score_payload(cfg: dict) -> dict:
-    """The one game the panel's score card shows right now (score_on=0: none).
-    Several NY games (or, with none, the 3 closest games) take turns."""
-    off = {"score_on": 0}
-    if not cfg["show_scores"]:
-        return off
-    leagues = [lg for lg in ("mlb", "nba") if cfg[f"scores_{lg}"]]
-    games = live_games(leagues)
-    if not games:
-        return off
-    ny = [g for g in games if g["away"]["ny"] or g["home"]["ny"]]
-    pool = ny or games[:3]
-    g = pool[int(time.time() // SCORES_ROTATE_S) % len(pool)]
+def just_finished(leagues: list[str]) -> list[dict]:
+    """Games that ended in the last WIN_SHOW_S seconds, NY first."""
+    now = time.time()
+    done = [g for t, g in _ended.values() if now - t <= WIN_SHOW_S and g["league"] in leagues]
+    return sorted(done, key=lambda g: not _ny(g))
+
+
+def next_game(games: list[dict]) -> str:
+    """'NYK 7:30PM' for the next scheduled game (NY teams first), or ''."""
+    pre = [g for g in games if g["state"] == "pre"]
+    for g in sorted(pre, key=lambda g: not _ny(g)):
+        m = re.search(r"(\d{1,2}:\d{2}) ?([AP])M", g.get("when", ""), re.I)
+        if m:
+            team = g["away"] if g["away"]["ny"] else g["home"] if g["home"]["ny"] else g["away"]
+            return f"{team['abbr']} {m[1]}{m[2].upper()}"
+    return ""
+
+
+def winner_side(g: dict) -> int:
+    """1 = away won, 2 = home won, 0 = no celebration (tie, or a NY team lost)."""
+    a, h = g["away"], g["home"]
+    if a["score"] == h["score"]:
+        return 0
+    side, team, other = (1, a, h) if a["score"] > h["score"] else (2, h, a)
+    return 0 if (other["ny"] and not team["ny"]) else side
+
+
+def _game_fields(g: dict) -> dict:
     out = {"score_on": 1, "score_status": g["detail"],
-           "score_seq": zlib.crc32(g["id"].encode()) & 0x7FFFFFFF or 1}
+           "score_seq": zlib.crc32(g["id"].encode()) & 0x7FFFFFFF or 1,
+           "score_final": 1 if g["state"] == "post" else 0,
+           "score_win": winner_side(g) if g["state"] == "post" else 0}
     for side in ("away", "home"):
         t = g[side]
         out[f"{side}_abbr"] = t["abbr"]
         out[f"{side}_score"] = t["score"]
         out[f"{side}_r"], out[f"{side}_g"], out[f"{side}_b"] = t["color"]
     return out
+
+
+SAMPLE_GAMES = {   # for "Preview game" / "Preview win"
+    "live": {"id": "preview-live", "league": "mlb", "state": "in", "detail": "TOP 9TH",
+             "away": {"abbr": "NYY", "score": 5, "color": led_color("003087"), "ny": True},
+             "home": {"abbr": "BOS", "score": 3, "color": led_color("bd3039"), "ny": False}},
+    "win":  {"id": "preview-win", "league": "nba", "state": "post", "detail": "FINAL",
+             "away": {"abbr": "BOS", "score": 104, "color": led_color("008348"), "ny": False},
+             "home": {"abbr": "NY", "score": 112, "color": led_color("1d428a", "f58426"), "ny": True}},
+}
+
+
+def score_payload(cfg: dict) -> dict:
+    """Scores-only mode. scores_only=1 makes the panel show games instead of
+    trains: a just-finished game for 5 min (celebrating a win), else a live
+    game (NY first; several take turns every 20 s), else score_msg."""
+    preview = cfg.get("preview_score") or {}
+    if preview.get("until", 0) > time.time():
+        g = dict(SAMPLE_GAMES[preview["kind"]], id=f"preview-{preview['seq']}")
+        return {"scores_only": 1, **_game_fields(g)}
+    if not cfg["show_scores"]:
+        return {"scores_only": 0, "score_on": 0}
+    leagues = [lg for lg in ("mlb", "nba") if cfg[f"scores_{lg}"]]
+    games = scoreboards(leagues)
+    live = live_games(leagues)
+    done = just_finished(leagues)
+    if done and (_ny(done[0]) or not any(_ny(g) for g in live)):
+        return {"scores_only": 1, **_game_fields(done[0])}
+    if live:
+        ny = [g for g in live if _ny(g)]
+        pool = ny or live[:3]
+        return {"scores_only": 1, **_game_fields(pool[int(time.time() // SCORES_ROTATE_S) % len(pool)])}
+    nxt = next_game(games)
+    return {"scores_only": 1, "score_on": 0,
+            "score_msg": f"NEXT {nxt}" if nxt else ("NO GAMES TODAY" if not games else "NO LIVE GAMES")}
 
 
 def arriving_train(feed, stop_id: str, line: str, now: datetime) -> int:
@@ -1364,6 +1440,21 @@ def api_alerts():
         log.warning("Alerts unavailable", exc_info=True)
         return jsonify({"ok": False, "alerts": []})
     return jsonify({"ok": True, "alerts": alerts})
+
+
+@app.post("/api/preview-scores")
+def api_preview_scores():
+    """{"kind": "live"|"win"}: show a sample game (or a win) on the panel."""
+    pid = require_panel_id()
+    kind = (request.get_json(silent=True) or {}).get("kind", "live")
+    if kind not in SAMPLE_GAMES:
+        abort(400, description="kind must be live or win")
+    with _config_lock:
+        cfg = load_config(pid)
+        cfg["preview_score"] = {"kind": kind, "seq": secrets.randbelow(10**6),
+                                "until": int(time.time()) + (30 if kind == "win" else 20)}
+        save_config(pid, cfg)
+    return jsonify({"ok": True})
 
 
 @app.get("/api/scores")

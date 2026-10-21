@@ -928,6 +928,12 @@
   .night-times input::-webkit-date-and-time-value { text-align: left; margin: 0; }
   .night-times + .toggle-row { margin-top: 12px; }
 
+  /* Live Scores (scores-only) locks everything train-related */
+  .locked { opacity: .3 !important; pointer-events: none; filter: grayscale(.6); }
+  .scores-note { display: none; margin-top: 10px; color: #8ecbff; }
+  .scores-note.show { display: block; }
+  .scores-note + .toggle-row { margin-top: 12px; }
+
   /* League sub-toggles under Live Scores */
   .league-chips { display: none; gap: 8px; margin-top: 10px; }
   .league-chips.show { display: flex; }
@@ -1172,7 +1178,9 @@
   <div class="toggle-row">
     <div>
       <span class="toggle-label">Live Scores</span>
-      <div class="toggle-hint" id="scores-hint">Score card every 2 min while a game is on · NY teams first · saves instantly</div>
+      <div class="toggle-hint"><span id="scores-hint">Scores only: the panel shows games instead of trains · NY teams first</span> ·
+        <button class="hint-link" onclick="previewScores('live')">Preview game</button> ·
+        <button class="hint-link" onclick="previewScores('win')">Preview win</button></div>
     </div>
     <label class="toggle-switch">
       <input type="checkbox" id="toggle-scores" onchange="saveScores()">
@@ -1182,6 +1190,10 @@
   <div class="league-chips" id="league-chips">
     <label class="chip"><input type="checkbox" id="scores-mlb" checked onchange="saveScores()"><span>MLB</span></label>
     <label class="chip"><input type="checkbox" id="scores-nba" checked onchange="saveScores()"><span>NBA</span></label>
+  </div>
+  <div class="scores-note toggle-hint" id="scores-note">
+    Live Scores is on: the panel shows only games (and celebrates a win for 5 minutes after it ends),
+    so train info and the other options are paused. Turn it off to see trains again.
   </div>
   <div class="toggle-row">
     <div>
@@ -1213,7 +1225,7 @@
   <div class="toggle-row">
     <div>
       <span class="toggle-label">Minimalist Mode</span>
-      <div class="toggle-hint">Logo + time centered · status dot · no scroll text</div>
+      <div class="toggle-hint">Logo + time centered · status dot · leave-by &amp; alerts scroll underneath if on</div>
     </div>
     <label class="toggle-switch">
       <input type="checkbox" id="toggle-minimalist" onchange="updateMinimalistUI()">
@@ -1416,7 +1428,7 @@ let nightOff         = false;   // ...and the panel is actually dark for it
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle', '/api/scores'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle', '/api/scores', '/api/preview-scores'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1876,8 +1888,8 @@ function updateMinimalistUI() {
   const dim = (id, off) =>
     document.getElementById(id).closest('.toggle-row').style.opacity = off ? '0.35' : '1';
   const twoRows = dualOn || bothOn;
-  dim('toggle-leave-by', twoRows || minimal);
-  dim('toggle-alerts', twoRows || minimal);
+  dim('toggle-leave-by', twoRows);
+  dim('toggle-alerts', twoRows);
   dim('toggle-minimalist', twoRows);
   dim('toggle-weather', twoRows);
   document.getElementById('dual-note').style.display = twoRows ? 'block' : 'none';
@@ -1924,16 +1936,22 @@ function updateOptionsSummary() {
   const on = id => document.getElementById(id).checked;
   const twoRows = dualOn || bothOn, minimal = on('toggle-minimalist');
   const parts = [];
+  if (on('toggle-scores')) {                       // scores only: nothing train-related shows
+    const lg = [on('scores-mlb') && 'MLB', on('scores-nba') && 'NBA'].filter(Boolean).join('/');
+    parts.push(`Scores only${lg ? ` (${lg})` : ''}`);
+    if (on('toggle-night')) {
+      parts.push(`Night off ${clockLabel(document.getElementById('night-start').value || '01:00')}–` +
+                 clockLabel(document.getElementById('night-end').value || '06:00'));
+    }
+    document.getElementById('options-summary').innerHTML = 'On: ' + parts.map(p => `<b>${p}</b>`).join(' · ');
+    return;
+  }
   if (dualOn) parts.push('Two trains');
   if (bothOn) parts.push('Both directions');
   if (!twoRows && minimal) parts.push('Minimalist');
-  if (!twoRows && !minimal && on('toggle-leave-by')) parts.push('Leave by');
-  if (!twoRows && !minimal && on('toggle-alerts')) parts.push('Alerts');
+  if (!twoRows && on('toggle-leave-by')) parts.push('Leave by');
+  if (!twoRows && on('toggle-alerts')) parts.push('Alerts');
   if (!twoRows && on('toggle-weather')) parts.push('Weather');
-  if (on('toggle-scores')) {
-    const lg = [on('scores-mlb') && 'MLB', on('scores-nba') && 'NBA'].filter(Boolean).join('/');
-    parts.push(`Scores${lg ? ` (${lg})` : ''}`);
-  }
   if (on('toggle-animations')) parts.push('Animations');
   if (on('toggle-night')) {
     parts.push(`Night off ${clockLabel(document.getElementById('night-start').value || '01:00')}–` +
@@ -2030,12 +2048,32 @@ async function refreshWeatherHint() {
 }
 
 // ── Live scores ───────────────────────────────────────────────────────────
-const SCORES_HINT = 'Score card every 2 min while a game is on · NY teams first · saves instantly';
+const SCORES_HINT = 'Scores only: the panel shows games instead of trains · NY teams first';
 
 function updateScoresUI() {
   const on = document.getElementById('toggle-scores').checked;
   document.getElementById('league-chips').classList.toggle('show', on);
+  document.getElementById('scores-note').classList.toggle('show', on);
   if (!on) document.getElementById('scores-hint').textContent = SCORES_HINT;
+  // Scores only: lock everything about trains so it's clear what the panel shows.
+  const rows = ['toggle-dual', 'toggle-both', 'toggle-leave-by', 'toggle-alerts', 'toggle-weather',
+                'toggle-animations', 'toggle-minimalist'];
+  rows.forEach(id => document.getElementById(id).closest('.toggle-row').classList.toggle('locked', on));
+  document.getElementById('dual-note').classList.toggle('locked', on);
+  ['line-grid', 'station-list', 'platform-N', 'walk-val'].forEach(id =>
+    document.getElementById(id).closest('.section').classList.toggle('locked', on));
+  document.getElementById('train-tabs').classList.toggle('locked', on);
+  if (typeof updateOptionsSummary === 'function' && document.getElementById('options-summary')) updateOptionsSummary();
+}
+
+async function previewScores(kind) {
+  try {
+    await api('/api/preview-scores', { kind });
+    showToast(kind === 'win' ? 'Watch the panel — a win celebration shows within 15 s'
+                             : 'Watch the panel — a sample game shows within 15 s for 20 s');
+  } catch (e) {
+    showToast('Could not reach the server — ' + e.message);
+  }
 }
 
 async function saveScores() {
@@ -2045,8 +2083,8 @@ async function saveScores() {
   updateScoresUI();
   if (on && !mlb && !nba) showToast('Pick MLB, NBA or both');
   const ok = await patchConfig({ show_scores: on, scores_mlb: mlb, scores_nba: nba },
-                               on ? `Live scores on (${[mlb && 'MLB', nba && 'NBA'].filter(Boolean).join(' + ') || 'no leagues'})`
-                                  : 'Live scores off');
+                               on ? `Scores only (${[mlb && 'MLB', nba && 'NBA'].filter(Boolean).join(' + ') || 'no leagues'}) — trains hidden`
+                                  : 'Live scores off — trains are back');
   if (ok) refreshScoresHint();
 }
 

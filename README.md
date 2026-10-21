@@ -143,7 +143,8 @@ protects against crashes, not against firmware that runs but misbehaves.
   along the bottom in this order: "Leave by" (white), weather, service alert
   (yellow) — each only if it's turned on (and, for alerts, if there is one).
 - **Minimalist:** bullet + time centred, with a 2×2 status dot in the top-left
-  corner (green normal, yellow alerts/changes, red suspended).
+  corner (green normal, yellow alerts/changes, red suspended). Leave-by, weather
+  and alerts scroll along the bottom if they're turned on.
 - **Weather** (optional, **Display Options → Show Weather**): icon + temperature
   (°F) for the selected station, plus an **umbrella** icon when there's at least
   a 50% chance of rain in the next 12 hours (or it's raining now). Normal mode
@@ -151,11 +152,15 @@ protects against crashes, not against firmware that runs but misbehaves.
   mode shows it centred under the time. Data from Open-Meteo (free, no key),
   refreshed every 15 min; if it can't be reached the panel just hides it.
 - **Live Scores** (**Display Options → Live Scores**, with **MLB** / **NBA**
-  sub-toggles): while a game is on, a 6 s score card every 2 minutes — team
-  abbreviations in team colours, big scores, and the inning/quarter. A New York
-  team's game (Yankees, Mets, Knicks, Nets) always wins; several NY games take
-  turns; with none, the closest games take turns. Scores from ESPN's public
-  scoreboard, refreshed every 30 s.
+  sub-toggles) turns the panel into a scoreboard: it shows games *instead of*
+  trains, and the train options are locked in the web app until it's turned off
+  (Night Schedule still works). Team abbreviations in team colours, big scores,
+  inning/quarter. A Yankees/Mets/Knicks/Nets game always wins; several take turns
+  every 20 s; with none, the closest games do. When a game it was showing ends,
+  the final stays up for 5 minutes with confetti and "NYK WIN!" (no celebration
+  if a New York team lost). No game on: "NEXT GAME" with the next start time.
+  **Preview game** / **Preview win** show samples. Data: ESPN's public
+  scoreboard, every 30 s.
 - **Animations** (**Display Options → Animations**): when a train is due at your
   station within a minute, the panel shows the bullet + "ARRIVING" and a little
   two-car train in the line's colour pulls in, stops and leaves (~4 s), once per
