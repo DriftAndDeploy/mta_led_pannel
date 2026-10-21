@@ -570,13 +570,58 @@ def get_alerts() -> list[dict]:
                 continue
             alerts.append({
                 "routes":  {ie.route_id for ie in a.informed_entity if ie.route_id},
+                "stops":   {ie.stop_id for ie in a.informed_entity if ie.stop_id},
                 "periods": [(p.start or 0, p.end or 0) for p in a.active_period],
-                "text":    condense_alert_text(full),
+                "text":    condense_alert_text(full),   # for the panel
+                "full":    full,                        # for the web app
                 "level":   classify_alert(full),   # judged on the full wording
             })
         return alerts
 
     return cache.get(("alerts",), ALERTS_TTL_S, load)
+
+
+def _alert_active(a: dict, now_ts: float) -> bool:
+    return not a["periods"] or any(start <= now_ts <= (end or float("inf"))
+                                   for start, end in a["periods"])
+
+
+def alert_directions(a: dict, line: str) -> set:
+    """{'N'}, {'S'} or set() (both / unknown) for an alert on this line.
+    Uses the platform stop IDs the MTA tags (e.g. L14N) when there are any,
+    otherwise direction words in the text ("Northbound", "Manhattan-bound")."""
+    dirs = {sid[-1] for sid in a.get("stops", ()) if sid[-1:] in ("N", "S")}
+    if dirs:
+        return dirs if len(dirs) == 1 else set()
+    t = a.get("full", a["text"]).lower()
+    n_label, s_label = (x.lower() for x in DIRECTION_LABELS.get(line, ("Uptown", "Downtown")))
+    words = {
+        "N": ["northbound", "uptown", f"{n_label}-bound", f"{n_label} bound"],
+        "S": ["southbound", "downtown", f"{s_label}-bound", f"{s_label} bound"],
+    }
+    found = {d for d, ws in words.items() if any(re.search(rf"\b{re.escape(w)}\b", t) for w in ws)}
+    return found if len(found) == 1 else set()
+
+
+def alerts_for_platform(line: str, stop_parent: str, platform: str, now_ts: float) -> list[dict]:
+    """Active alerts for a line that apply to this direction, most severe and
+    station-specific first. Full wording (the web app has room for it)."""
+    out = []
+    for a in get_alerts():
+        if line not in a["routes"] or not _alert_active(a, now_ts):
+            continue
+        dirs = alert_directions(a, line)
+        if dirs and platform not in dirs:
+            continue
+        here = any(sid.startswith(stop_parent) for sid in a.get("stops", ()))
+        out.append((a["level"], here, a.get("full", a["text"])))
+    out.sort(key=lambda x: (-x[0], not x[1]))
+    seen, alerts = set(), []
+    for level, here, text in out:
+        if text not in seen:          # the MTA sometimes repeats an alert per route
+            seen.add(text)
+            alerts.append({"text": text, "level": level})
+    return alerts
 
 
 def alert_for_line(line: str, now_ts: float) -> tuple[str, int]:
@@ -588,11 +633,8 @@ def alert_for_line(line: str, now_ts: float) -> tuple[str, int]:
         return "", 0
     best = None
     for a in alerts:
-        if line not in a["routes"]:
-            continue
-        if a["periods"] and not any(start <= now_ts <= (end or float("inf"))
-                                    for start, end in a["periods"]):
-            continue   # expired or not started yet
+        if line not in a["routes"] or not _alert_active(a, now_ts):
+            continue   # other line, expired or not started yet
         if best is None or a["level"] > best["level"]:
             best = a
     return (best["text"], best["level"]) if best else ("", 0)
@@ -1116,6 +1158,24 @@ def api_night_skip():
         cfg["night_skip_until"] = int(end.timestamp()) if skip and end else 0
         save_config(pid, cfg)
     return jsonify({"ok": True, "until": clock_label(end) if skip and end else None})
+
+
+@app.get("/api/alerts")
+def api_alerts():
+    """Service alerts for a line/station/direction, for the web app ticker."""
+    line = request.args.get("line", "")
+    if line not in LINES:
+        abort(400, description="unknown line")
+    stop = (request.args.get("stop") or "").upper()[:8]
+    platform = request.args.get("platform", "N")
+    if platform not in ("N", "S"):
+        abort(400, description="platform must be N or S")
+    try:
+        alerts = alerts_for_platform(line, stop, platform, time.time())
+    except Exception:
+        log.warning("Alerts unavailable", exc_info=True)
+        return jsonify({"ok": False, "alerts": []})
+    return jsonify({"ok": True, "alerts": alerts})
 
 
 @app.get("/api/status")

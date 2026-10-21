@@ -495,6 +495,44 @@ class BothDirections(unittest.TestCase):
         self.assertEqual(two["dirs"], 0)                                             # back to two-train mode
 
 
+class PlatformAlerts(unittest.TestCase):
+    ALERTS = [
+        {"routes": {"L"}, "stops": set(), "periods": [], "level": 1, "text": "x",
+         "full": "Manhattan-bound L trains are running with delays."},
+        {"routes": {"L"}, "stops": set(), "periods": [], "level": 1, "text": "x",
+         "full": "Brooklyn-bound L trains are skipping Graham Av."},
+        {"routes": {"L"}, "stops": {"L14S"}, "periods": [], "level": 2, "text": "x",
+         "full": "No L trains at Morgan Av toward Canarsie."},
+        {"routes": {"L", "G"}, "stops": set(), "periods": [], "level": 1, "text": "x",
+         "full": "L trains run every 12 minutes."},
+        {"routes": {"L"}, "stops": set(), "periods": [(0, 5)], "level": 2, "text": "x",
+         "full": "Old alert."},
+        {"routes": {"G"}, "stops": set(), "periods": [], "level": 1, "text": "x",
+         "full": "Northbound G trains are delayed."},
+    ]
+
+    def test_direction_filtering_and_order(self):
+        with mock.patch.object(ps, "get_alerts", return_value=self.ALERTS):
+            north = [a["text"] for a in ps.alerts_for_platform("L", "L14", "N", 1000)]
+            south = ps.alerts_for_platform("L", "L14", "S", 1000)
+        self.assertEqual(north, ["Manhattan-bound L trains are running with delays.",
+                                 "L trains run every 12 minutes."])
+        self.assertEqual([a["text"] for a in south],
+                         ["No L trains at Morgan Av toward Canarsie.",          # severe + this station first
+                          "Brooklyn-bound L trains are skipping Graham Av.",
+                          "L trains run every 12 minutes."])
+        self.assertEqual(south[0]["level"], 2)
+
+    def test_endpoint(self):
+        c = ps.app.test_client()
+        with mock.patch.object(ps, "get_alerts", return_value=self.ALERTS):
+            j = c.get("/api/alerts?line=G&stop=G29&platform=S").get_json()
+        self.assertEqual([a["text"] for a in j["alerts"]], ["L trains run every 12 minutes."])   # tagged L+G; northbound G alert left out
+        self.assertEqual(c.get("/api/alerts?line=X&platform=N").status_code, 400)
+        with mock.patch.object(ps, "get_alerts", side_effect=RuntimeError("MTA down")):
+            self.assertEqual(c.get("/api/alerts?line=L&stop=L14&platform=N").get_json()["ok"], False)
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

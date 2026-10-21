@@ -126,6 +126,39 @@
     margin-bottom: 14px;
   }
 
+  /* Service-alert ticker under the platform buttons */
+  .alert-ticker {
+    display: none;
+    margin-top: 12px;
+    padding: 9px 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: 12px;
+    letter-spacing: .5px;
+    color: #ffd400;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+            mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  }
+  .alert-ticker.show { display: block; }
+  .alert-ticker.severe { color: #ff6a5a; }
+  .alert-ticker.good { color: #5c5; text-align: center; -webkit-mask-image: none; mask-image: none; }
+  .alert-track {
+    display: inline-block;
+    padding-left: 100%;               /* start just off the right edge */
+    animation: alert-scroll linear infinite;
+    animation-duration: var(--dur, 20s);
+  }
+  .alert-ticker.good .alert-track { padding-left: 0; animation: none; }
+  .alert-sep { color: var(--muted); margin: 0 14px; }
+  @keyframes alert-scroll { to { transform: translateX(-100%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .alert-ticker { white-space: normal; padding: 9px 12px; -webkit-mask-image: none; mask-image: none; }
+    .alert-track { padding-left: 0; animation: none; }
+  }
+
   /* Collapsible section (04 Display Options) */
   .collapse-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1057,6 +1090,9 @@
       <span class="opt-sub" id="label-S">Direction 2</span>
     </button>
   </div>
+  <div class="alert-ticker" id="alert-ticker" role="status" aria-live="polite">
+    <span class="alert-track" id="alert-track"></span>
+  </div>
 </div>
 
 <!-- Display options (collapsible; shows a one-line summary when collapsed) -->
@@ -1337,6 +1373,9 @@ let bothOn           = false;   // both directions of one line
 let activeTrain      = 0;          // which train sections 01-03 / 05 are editing
 let trains           = [null, null];   // {line, station, platform, walk}
 let stationsReq      = 0;
+let alertsKey        = '';      // line|station|platform last fetched
+let alertsAt         = 0;
+let alertsReq        = 0;
 let nightActive      = false;   // inside tonight's off window (from /api/status)
 let nightOff         = false;   // ...and the panel is actually dark for it
 
@@ -2214,7 +2253,46 @@ function updatePreview() {
     dualOn ? `${label(trainAt(0))}  +  ${label(trainAt(1))}`
            : label(trainAt(0)) + (bothOn ? ' · both ways' : '');
   updateTrainTabs();
+  refreshAlerts();
 }
+
+// ── Service alerts for the selected line / station / direction ───────────
+function escapeHtml(t) {
+  return t.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function refreshAlerts(force = false) {
+  const box = document.getElementById('alert-ticker');
+  if (!selectedLine || !selectedStation) { box.classList.remove('show'); alertsKey = ''; return; }
+  const key = `${selectedLine}|${selectedStation.id}|${selectedPlatform}`;
+  if (!force && key === alertsKey && Date.now() - alertsAt < 60000) return;
+  alertsKey = key; alertsAt = Date.now();
+  const req = ++alertsReq;
+  let data;
+  try {
+    data = await api(`/api/alerts?line=${encodeURIComponent(selectedLine)}` +
+                     `&stop=${encodeURIComponent(selectedStation.id)}&platform=${selectedPlatform}`);
+  } catch (e) { data = { ok: false, alerts: [] }; }
+  if (req !== alertsReq) return;                 // a newer selection is already loading
+  const track = document.getElementById('alert-track');
+  box.classList.remove('good', 'severe');
+  if (!data.ok) { box.classList.remove('show'); return; }
+  if (!data.alerts.length) {
+    track.textContent = '✓ Good service';
+    box.classList.add('show', 'good');
+    return;
+  }
+  track.innerHTML = data.alerts.map(a => escapeHtml(a.text)).join('<span class="alert-sep">•</span>');
+  box.classList.toggle('severe', data.alerts.some(a => a.level >= 2));
+  box.classList.add('show');
+  // Constant reading speed (~45 px/s) however long the alerts are.
+  requestAnimationFrame(() => {
+    const px = track.scrollWidth;
+    track.style.setProperty('--dur', `${Math.max(8, px / 45).toFixed(1)}s`);
+    track.style.animation = 'none'; void track.offsetWidth; track.style.animation = '';   // restart
+  });
+}
+setInterval(() => refreshAlerts(true), 60000);
 
 async function saveConfig() {
   trains[activeTrain] = currentTrain();
