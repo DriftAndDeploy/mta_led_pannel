@@ -4,6 +4,7 @@ Offline tests for proxy_server.py (no MTA access needed).
     cd server && venv/bin/python -m unittest test_server -v
 """
 import hashlib
+import json
 import os
 import tempfile
 import unittest
@@ -796,15 +797,15 @@ class CustomLayout(unittest.TestCase):
         ok = [[2, 32, 0, 2, 1, 0], [4, 17, 20, 47, 3, 0xF800]]
         r = c.post("/api/config?panel_id=CL0001", json={"layout_single": ok, "custom_layout": True})
         self.assertEqual(r.status_code, 200)
-        for bad in ([[13, 0, 0, 0, 0, 0]], [[2, 0, 0, 0, 0]], [[2, 99, 0, 0, 0, 0]], [[2, 0, 0, True, 0, 0]],
+        for bad in ([[13, 0, 0, 0, 0, 0]], [[8, 0, 0, 0, 0, 0]], [[2, 0, 0, 0, 0]], [[2, 0, 0, 0, 16, 0]], [[2, 99, 0, 0, 0, 0]], [[2, 0, 0, True, 0, 0]],
                     [[2, 0, 0, 1, 0, 0]] * 17, "nope"):
             self.assertEqual(c.post("/api/config?panel_id=CL0001", json={"layout_single": bad}).status_code, 400)
 
     def test_payload_layout_data_and_mode(self):
         c = ps.app.test_client()
         feed = fake_feed("L14N", [at(10, 25)])
-        layout = [[ps.EL["time"], 32, 0, 2, 1, 0], [ps.EL["leave"], 0, 24, 0, 0, 0],
-                  [ps.EL["countdown"], 63, 24, 1, 2, 0], [ps.EL["clock"], 0, 0, 1, 0, 0]]
+        layout = [[ps.EL["time"], 32, 0, 2, 1, 0], [ps.EL["leave"], 0, 24, 0, 4, 0],
+                  [ps.EL["clock"], 0, 0, 1, 0, 0]]
         c.post("/api/config?panel_id=CL0002", json={"custom_layout": True, "layout_single": layout,
                "show_leave_by": False, "show_alerts": True, "layout_label": "HOME"})
         with mock.patch.object(ps, "get_feed", return_value=feed), \
@@ -819,10 +820,34 @@ class CustomLayout(unittest.TestCase):
         self.assertEqual(j["layout"], layout)
         self.assertEqual((j["leave_by"], j["show_leave_by"]), ("10:15", True))   # layout has a leave element
         self.assertEqual((j["alert_msg"], j["show_alerts"]), ("", False))        # ...but no ticker
-        self.assertEqual((j["mins"], j["clock_s"], j["label"]), (15, 10 * 3600 + 10 * 60, "HOME"))
+        self.assertEqual((j["clock_s"], j["label"]), (10 * 3600 + 10 * 60, "HOME"))
+        self.assertNotIn("minimalist", j)
         self.assertEqual(two["layout"], ps.LAYOUT_PRESETS["two_rows"])            # two-row modes use layout_two
         self.assertNotIn("layout", off)
         self.assertEqual(off["leave_by"], "")                                     # back to the toggles
+
+    def test_migrates_old_configs(self):
+        pid = "CL0003"
+        old = {"custom_layout": True, "layout_v": 1,
+               "layout_single": [[3, 2, 24, 0, 0, 0], [3, 63, 24, 1, 2, 0], [8, 63, 24, 1, 2, 0], [2, 32, 0, 2, 1, 0]],
+               "layout_two": [[12, 1, 1, 1, 0, 0], [11, 59, 17, 2, 2, 0]]}
+        with open(ps.config_path(pid), "w") as f:
+            json.dump(old, f)
+        cfg = ps.load_config(pid)
+        self.assertEqual(cfg["layout_single"], [[3, 2, 24, 1, 0, 0], [3, 63, 24, 1, 6, 0], [2, 32, 0, 2, 1, 0]])
+        self.assertEqual(cfg["layout_two"], [[11, 59, 17, 2, 2, 0]])
+        self.assertEqual(ps.load_config(pid)["layout_single"], cfg["layout_single"])   # same every load
+        # minimalist mode -> the Minimalist layout, with a ticker if leave-by / alerts were on
+        with open(ps.config_path(pid), "w") as f:
+            json.dump({"minimalist": True, "show_leave_by": True, "show_alerts": False}, f)
+        cfg = ps.load_config(pid)
+        self.assertTrue(cfg["custom_layout"])
+        self.assertNotIn("minimalist", cfg)
+        self.assertEqual(cfg["layout_single"][-1], [ps.EL["ticker"], 0, 24, 64, 1, 0])
+        self.assertEqual(ps._layout(cfg["layout_single"]), cfg["layout_single"])
+        with open(ps.config_path(pid), "w") as f:
+            json.dump({"minimalist": True, "show_leave_by": False, "show_alerts": False}, f)
+        self.assertEqual(ps.load_config(pid)["layout_single"], ps.LAYOUT_PRESETS["minimalist"])
 
     def test_presets_are_valid(self):
         for name, lay in ps.LAYOUT_PRESETS.items():

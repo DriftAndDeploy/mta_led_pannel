@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.8.0"
-#define FW_BUILD   780
+#define FW_VERSION "7.9.0"
+#define FW_BUILD   790
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -108,7 +108,6 @@ struct PanelState {
   struct { uint8_t type; int8_t x, y; uint8_t a, b; uint16_t color; } el[16];
   char     label[16]      = "";     // text for the label element
   uint32_t clock_s        = 0;      // NYC seconds since midnight at the last poll
-  int16_t  mins = -1, mins2 = -1;   // minutes until train 1 / train 2 leaves
   // Faster route (Alternate Routes on, and it saves 5+ min)
   bool     alt            = false;
   char     alt_line[4]    = "";
@@ -129,7 +128,6 @@ struct PanelState {
   bool     show_leave_by  = true;
   bool     show_alerts    = true;
   bool     panel_off      = false;
-  bool     minimalist     = false;
   bool     have_data      = false;
   uint32_t updated_ms     = 0;      // millis() of last good response
   uint32_t version        = 0;      // bumps whenever new data arrives
@@ -183,7 +181,6 @@ void runOta(int build);
 void markFirmwareGood();
 void render(const PanelState& s);
 void drawNormal(const PanelState& s);
-void drawMinimalist(const PanelState& s);
 void drawLogoAt(int cx, int cy, const PanelState& s);
 void drawBullet(int cx, int cy, int r, const char* l, uint8_t cr, uint8_t cg, uint8_t cb);
 void drawDual(const PanelState& s);
@@ -193,7 +190,6 @@ void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
 void drawScores(const PanelState& s, bool stale);
 void drawAlt(const PanelState& s);
 void drawCustom(const PanelState& s);
-void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
 void buildWeatherText(const PanelState& s);
@@ -217,6 +213,9 @@ void buildWeatherText(const PanelState& s);
 static int clipL = 0, clipR = 64;
 static inline void cpx(int x, int y, uint16_t c) {
   if (x >= clipL && x < clipR && y >= 0 && y < 32) dma_display->drawPixel(x, y, c);
+}
+static inline void blockPx(int x, int y, int s, uint16_t c) {   // s x s block (scaled pixel)
+  for (int j = 0; j < s; j++) for (int i = 0; i < s; i++) cpx(x + i, y + j, c);
 }
 
 void drawTestPattern();
@@ -657,8 +656,6 @@ bool fetchTrainTimes() {
   }
   copyStr(n.label, sizeof(n.label), doc["label"] | "");
   n.clock_s = doc["clock_s"] | 0u;
-  n.mins    = doc["mins"]  | -1;
-  n.mins2   = doc["mins2"] | -1;
   n.alt            = (doc["alt"] | 0) != 0;
   copyStr(n.alt_line, sizeof(n.alt_line), doc["alt_line"] | "");
   copyStr(n.alt_time, sizeof(n.alt_time), doc["alt_time"] | "");
@@ -680,7 +677,6 @@ bool fetchTrainTimes() {
   n.show_leave_by  = doc["show_leave_by"] | true;
   n.show_alerts    = doc["show_alerts"]   | true;
   n.panel_off      = (doc["panel_off"]  | 0) != 0;
-  n.minimalist     = (doc["minimalist"] | 0) != 0;
   n.have_data      = true;
   n.updated_ms     = millis();
   latest_server_build = doc["fw_build"] | 0;
@@ -869,7 +865,6 @@ void render(const PanelState& in) {
   if (s.alt)             drawAlt(s);
   else if (s.custom)     drawCustom(s);
   else if (s.dual)       drawDual(s);
-  else if (s.minimalist) drawMinimalist(s);
   else                   drawNormal(s);
   present();
 }
@@ -916,38 +911,6 @@ void drawNormal(const PanelState& s) {
   }
 
   drawLogoAt(scrolling || weather ? 8 : 32, 24, s);
-}
-
-// Minimalist layout: [logo][5px][time] centred as one unit + status dot.
-// With weather on, that row moves up 3 px and the weather sits centred below.
-void drawMinimalist(const PanelState& s) {
-  const int GAP = 5;
-  bool weather   = s.wx_show && wx_part[0];
-  bool ticker    = leave_part[0] || alert_part[0];   // leave-by / alerts, if turned on
-  int cy         = (weather || ticker) ? 13 : 16;   // logo centre row
-  int timeWidth  = strlen(s.train_time) * 6;
-  int totalWidth = 14 + GAP + timeWidth;
-  int startX     = (PANEL_RES_X - totalWidth) / 2;
-
-  drawLogoAt(startX + 7, cy, s);
-
-  dma_display->setTextSize(1);
-  dma_display->setTextColor(dma_display->color565(s.time_r, s.time_g, s.time_b));
-  dma_display->setCursor(startX + 14 + GAP, cy - 4);
-  dma_display->print(s.train_time);
-
-  if (ticker) {           // scrolls along the bottom: leave by, weather, alert
-    int cx = scroll_x;
-    cx = drawRun(leave_part, cx, 24, textColor(s, dma_display->color565(255, 255, 255)));
-    if (weather) cx = drawRun(wx_part, cx, 24, textColor(s, WX_TEXT_COLOR)) + 12;
-    cx = drawRun(alert_part, cx, 24, textColor(s, dma_display->color565(255, 220, 0)));
-    scroll_x--;
-    if (cx < 0) scroll_x = PANEL_RES_X;
-  } else if (weather) {
-    drawRun(wx_part, (PANEL_RES_X - runWidth(wx_part)) / 2, 24, textColor(s, WX_TEXT_COLOR));
-  }
-
-  drawStatusDot(s.service_status);
 }
 
 // Subway bullet. Dimming keeps bright colours from blooming on the panel;
@@ -1549,15 +1512,6 @@ void drawScores(const PanelState& s, bool stale) {
   present();
 }
 
-void drawStatusDot(uint8_t status) {
-  uint16_t c = status == 2 ? dma_display->color565(220,  40,  40)   // suspended
-             : status == 1 ? dma_display->color565(255, 200,   0)   // delays
-             :               dma_display->color565(  0, 200,  80);  // good
-  // 2x2 block in the top-left corner: 1 px down, 2 px in. The panel has no
-  // working LEDs at (0,2) and (1,2) (same spot mirrored in every corner),
-  // so the dot starts at x=2 to stay clear of them.
-  dma_display->fillRect(2, 1, 2, 2, c);
-}
 
 // ---------------------------------------------------------------------------
 // Weather strip. Icons are 7x7 bitmaps (bit 6 = leftmost pixel) that ride in
@@ -1579,33 +1533,34 @@ static const uint8_t BMP_BOLT[3]     = {0x18, 0x0C, 0x18};                     /
 static const uint8_t BMP_CANOPY[3]   = {0x1C, 0x3E, 0x7F};                     // rows 0-2
 static const uint8_t BMP_HANDLE[4]   = {0x08, 0x08, 0x28, 0x10};               // rows 3-6
 
-static void drawBits(int x, int y, const uint8_t* rows, uint8_t n, uint16_t c) {
+static void drawBits(int x, int y, const uint8_t* rows, uint8_t n, uint16_t c, int s = 1) {
   for (uint8_t r = 0; r < n; r++)
     for (uint8_t b = 0; b < 7; b++)
-      if (rows[r] & (0x40 >> b)) cpx(x + b, y + r, c);
+      if (rows[r] & (0x40 >> b)) blockPx(x + b * s, y + r * s, s, c);
 }
 
-static void drawWxIcon(int x, int y, uint8_t icon) {
+// s = scale (custom layouts can show weather bigger)
+static void drawWxIcon(int x, int y, uint8_t icon, int s = 1) {
   uint16_t grey   = dma_display->color565(150, 150, 165);
   uint16_t yellow = dma_display->color565(255, 190, 0);
   switch (icon) {
-    case WX_SUN:    drawBits(x, y, BMP_SUN, 7, yellow); break;
-    case WX_MOON:   drawBits(x, y, BMP_MOON, 7, dma_display->color565(210, 210, 160)); break;
-    case WX_PARTLY: drawBits(x, y, BMP_SMALLSUN, 4, yellow);
-                    drawBits(x, y + 3, BMP_SIDECLOUD, 4, grey); break;
-    case WX_RAIN:   drawBits(x, y, BMP_TOPCLOUD, 4, grey);
-                    drawBits(x, y + 5, BMP_DROPS, 2, dma_display->color565(60, 130, 255)); break;
-    case WX_SNOW:   drawBits(x, y, BMP_TOPCLOUD, 4, grey);
-                    drawBits(x, y + 5, BMP_FLAKES, 2, dma_display->color565(230, 230, 255)); break;
-    case WX_STORM:  drawBits(x, y, BMP_TOPCLOUD, 4, grey);
-                    drawBits(x, y + 4, BMP_BOLT, 3, yellow); break;
-    default:        drawBits(x, y, BMP_CLOUD, 7, grey); break;
+    case WX_SUN:    drawBits(x, y, BMP_SUN, 7, yellow, s); break;
+    case WX_MOON:   drawBits(x, y, BMP_MOON, 7, dma_display->color565(210, 210, 160), s); break;
+    case WX_PARTLY: drawBits(x, y, BMP_SMALLSUN, 4, yellow, s);
+                    drawBits(x, y + 3 * s, BMP_SIDECLOUD, 4, grey, s); break;
+    case WX_RAIN:   drawBits(x, y, BMP_TOPCLOUD, 4, grey, s);
+                    drawBits(x, y + 5 * s, BMP_DROPS, 2, dma_display->color565(60, 130, 255), s); break;
+    case WX_SNOW:   drawBits(x, y, BMP_TOPCLOUD, 4, grey, s);
+                    drawBits(x, y + 5 * s, BMP_FLAKES, 2, dma_display->color565(230, 230, 255), s); break;
+    case WX_STORM:  drawBits(x, y, BMP_TOPCLOUD, 4, grey, s);
+                    drawBits(x, y + 4 * s, BMP_BOLT, 3, yellow, s); break;
+    default:        drawBits(x, y, BMP_CLOUD, 7, grey, s); break;
   }
 }
 
-static void drawUmbrella(int x, int y) {
-  drawBits(x, y, BMP_CANOPY, 3, dma_display->color565(80, 170, 255));
-  drawBits(x, y + 3, BMP_HANDLE, 4, dma_display->color565(180, 180, 180));
+static void drawUmbrella(int x, int y, int s = 1) {
+  drawBits(x, y, BMP_CANOPY, 3, dma_display->color565(80, 170, 255), s);
+  drawBits(x, y + 3 * s, BMP_HANDLE, 4, dma_display->color565(180, 180, 180), s);
 }
 
 static int glyphAdvance(char c) {
@@ -1658,13 +1613,18 @@ void buildWeatherText(const PanelState& s) {
 // Custom layout (web app → 07 Customize Layout). The server sends the
 // elements for the current mode as [type, x, y, a, b, color]; colour 0 means
 // the element's usual colour. Positions are what the web app's simulator
-// shows (it uses these same drawing rules and the same 5x7 font).
-//   x,y: bullets = centre; text = anchor (b: 0 left, 1 centre, 2 right) + top
-//   a:   bullet radius 4-7 | text size 1-2 | ticker width | leave format
+// shows (it uses these same drawing rules and the same fonts).
+//   x,y: bullets = centre; text = anchor (b bits 0-1: 0 left, 1 centre,
+//        2 right) + top
+//   a:   bullet radius 4-7 | font size (text 0-4, weather 1-3) | ticker width
+//   b:   leave bit 2 = time only ("8:32") | ticker bits 0-1 = also leave-by /
+//        weather, bits 2-3 = font size - 1
+// Font sizes: 0 = 3x5, 1 = 5x7, 2-4 = 5x7 scaled up with 1 px letter
+// spacing and a slim colon (size 2 is the big train time).
 // ---------------------------------------------------------------------------
 enum {
   EL_BULLET = 1, EL_TIME, EL_LEAVE, EL_TICKER, EL_WEATHER, EL_DOT, EL_CLOCK,
-  EL_COUNTDOWN, EL_LABEL, EL_BULLET2, EL_TIME2, EL_COUNTDOWN2
+  EL_LABEL = 9, EL_BULLET2, EL_TIME2          // 8 and 12 (countdowns) were removed
 };
 
 // Classic 5x7 font, ASCII 32-126 (from Adafruit GFX glcdfont.c, BSD licence),
@@ -1767,25 +1727,76 @@ static const uint8_t FONT5X7[95][5] = {
   {0x02, 0x01, 0x02, 0x04, 0x02},  // '~'
 };
 
-static void glyph(char ch, int x, int y, uint16_t c) {
-  if (ch < 32 || ch > 126) return;
-  const uint8_t* g = FONT5X7[ch - 32];
-  for (int col = 0; col < 5; col++)
-    for (int row = 0; row < 8; row++)              // 8 rows, like Adafruit's drawChar
-      if (g[col] & (1 << row)) cpx(x + col, y + row, c);
+// Tiny 3x5 font, ASCII 32-126 (lowercase drawn as capitals). Bit r*3+c is
+// row r, column c (0 = left). ':' is 1 px wide.
+static const uint16_t TINY3X5[95] = {
+  0x0000, 0x2092, 0x002D, 0x5F7D, 0x3C9E, 0x42A1, 0x6AAA, 0x0012, 0x4494, 0x1491, 0x0AA8, 0x05D0,
+  0x1400, 0x01C0, 0x2000, 0x12A4, 0x7B6F, 0x749A, 0x73E7, 0x79A7, 0x49ED, 0x79CF, 0x7BCF, 0x2527,
+  0x7BEF, 0x79EF, 0x0208, 0x1410, 0x4454, 0x0E38, 0x1511, 0x20A7, 0x63EA, 0x5BEA, 0x3AEB, 0x624E,
+  0x3B6B, 0x72CF, 0x12CF, 0x6B4E, 0x5BED, 0x7497, 0x2B24, 0x5AED, 0x7249, 0x5BFD, 0x5B6B, 0x2B6A,
+  0x12EB, 0x6F6A, 0x5AEB, 0x388E, 0x2497, 0x7B6D, 0x2B6D, 0x5FED, 0x5AAD, 0x24AD, 0x72A7, 0x324B,
+  0x4889, 0x6926, 0x002A, 0x7000, 0x0011, 0x5BEA, 0x3AEB, 0x624E, 0x3B6B, 0x72CF, 0x12CF, 0x6B4E,
+  0x5BED, 0x7497, 0x2B24, 0x5AED, 0x7249, 0x5BFD, 0x5B6B, 0x2B6A, 0x12EB, 0x6F6A, 0x5AEB, 0x388E,
+  0x2497, 0x7B6D, 0x2B6D, 0x5FED, 0x5AAD, 0x24AD, 0x72A7, 0x64D6, 0x2492, 0x3593, 0x00F0
+};
+
+static int charAdv(char ch, int size) {
+  if (size <= 0) return ch == ':' ? 2 : 4;
+  if (size == 1) return 6;
+  return ch == ':' ? size + 1 : 5 * size + 1;
 }
 
-// drawRun() with clipping: same advance rules, icons included.
-static int drawRunClip(const char* text, int x, int y, uint16_t color) {
+static void drawChar(char ch, int x, int y, int size, uint16_t c) {
+  if (ch < 32 || ch > 126) return;
+  if (size <= 0) {
+    uint16_t g = TINY3X5[ch - 32];
+    for (int r = 0; r < 5; r++)
+      for (int col = 0; col < 3; col++)
+        if (g & (1 << (r * 3 + col))) cpx(x + col, y + r, c);
+  } else if (size >= 2 && ch == ':') {
+    blockPx(x, y + size * 3 / 2, size, c);
+    blockPx(x, y + size * 9 / 2, size, c);
+  } else {
+    const uint8_t* g = FONT5X7[ch - 32];
+    for (int col = 0; col < 5; col++)
+      for (int row = 0; row < 8; row++)              // 8 rows, like Adafruit's drawChar
+        if (g[col] & (1 << row)) blockPx(x + col * size, y + row * size, size, c);
+  }
+}
+
+static int textW(const char* t, int size) {
+  int w = 0;
+  for (; *t; t++) w += charAdv(*t, size);
+  return w - 1;
+}
+
+// Text with icons (weather, ticker) at font size s (1-3), clipped to
+// [clipL, clipR). Same advances as drawRun() at size 1.
+static int runAdv(char c, int s) {
+  if (c >= 1 && c <= CH_UMBRELLA) return 7 * s + 1;   // icons: 7 px + 1 px gap
+  if (c == CH_DEGREE) return 3 * s + 1;
+  if (c == CH_GAP)    return 3 * s;
+  return charAdv(c, s);
+}
+
+static int runW(const char* t, int s) {
+  int w = 0;
+  for (; *t; t++) w += runAdv(*t, s);
+  return w;
+}
+
+static int drawRunClip(const char* text, int x, int y, int s, uint16_t color) {
   for (const char* p = text; *p; p++) {
     char c = *p;
-    int adv = glyphAdvance(c);
+    int adv = runAdv(c, s);
     if (x > clipL - adv && x < clipR) {
-      if (c >= WX_SUN && c <= WX_STORM) drawWxIcon(x, y, c);
-      else if (c == CH_UMBRELLA)        drawUmbrella(x, y);
-      else if (c == CH_DEGREE)          { for (int i = 0; i < 3; i++) { cpx(x + i, y, color); cpx(x + i, y + 2, color); }
-                                          cpx(x, y + 1, color); cpx(x + 2, y + 1, color); }
-      else if (c != CH_GAP)             glyph(c, x, y, color);
+      if (c >= WX_SUN && c <= WX_STORM) drawWxIcon(x, y, c, s);
+      else if (c == CH_UMBRELLA)        drawUmbrella(x, y, s);
+      else if (c == CH_DEGREE) {
+        for (int i = 0; i < 3; i++) { blockPx(x + i * s, y, s, color); blockPx(x + i * s, y + 2 * s, s, color); }
+        blockPx(x, y + s, s, color); blockPx(x + 2 * s, y + s, s, color);
+      }
+      else if (c != CH_GAP)             drawChar(c, x, y, s, color);
     }
     x += adv;
   }
@@ -1797,25 +1808,12 @@ static uint16_t statusColor(uint8_t st) {
                                                       : dma_display->color565(0, 200, 80);
 }
 
-// Text at an anchor: size 1 = 5x7 font, size 2 = the big 2x digits.
+// Text at an anchor (align 0 left, 1 centre, 2 right) in font size 0-4.
 static void drawTextAt(const char* t, int x, int y, int size, int align, uint16_t c) {
   if (!t[0]) return;
-  int w = size >= 2 ? bigTimeWidth(t) : (int)strlen(t) * 6 - 1;
+  int w = textW(t, size);
   int x0 = align == 1 ? x - w / 2 : align == 2 ? x - w + 1 : x;
-  if (size >= 2) {
-    drawBigTime(x0, y, t, c);
-  } else {
-    dma_display->setTextSize(1);
-    dma_display->setTextColor(c);
-    dma_display->setCursor(x0, y);
-    dma_display->print(t);
-  }
-}
-
-static void countdownText(char* out, size_t n, int mins, int size) {
-  if (mins < 0)       snprintf(out, n, "--");
-  else if (mins == 0) snprintf(out, n, "Now");
-  else                snprintf(out, n, size >= 2 ? "%dm" : "%d min", mins);
+  for (; *t; t++) { drawChar(*t, x0, y, size, c); x0 += charAdv(*t, size); }
 }
 
 void drawCustom(const PanelState& s) {
@@ -1829,7 +1827,8 @@ void drawCustom(const PanelState& s) {
   for (int i = 0; i < s.n_el; i++) {
     const auto& l = s.el[i];
     uint16_t own = l.color;                        // 0 = usual colour
-    int size = constrain((int)l.a, 1, 2);
+    int size  = constrain((int)l.a, 0, 4);
+    int align = l.b & 3;
     switch (l.type) {
       case EL_BULLET:
         drawBullet(l.x, l.y, constrain((int)l.a, 4, 7), s.line, s.logo_r, s.logo_g, s.logo_b);
@@ -1838,55 +1837,50 @@ void drawCustom(const PanelState& s) {
         if (s.dual) drawBullet(l.x, l.y, constrain((int)l.a, 4, 7), s.line2, s.logo2_r, s.logo2_g, s.logo2_b);
         break;
       case EL_TIME:
-        drawTextAt(s.train_time, l.x, l.y, size, l.b, own ? own : timeC);
+        drawTextAt(s.train_time, l.x, l.y, size, align, own ? own : timeC);
         break;
       case EL_TIME2:
-        if (s.dual) drawTextAt(s.train_time2, l.x, l.y, size, l.b, own ? own : timeC);
+        if (s.dual) drawTextAt(s.train_time2, l.x, l.y, size, align, own ? own : timeC);
         break;
       case EL_LEAVE:
         if (s.leave_by[0] && strcmp(s.leave_by, "--:--")) {
-          snprintf(buf, sizeof(buf), l.a == 1 ? "%s" : "Leave %s", s.leave_by);
-          drawTextAt(buf, l.x, l.y, 1, l.b, own ? own : white);
+          snprintf(buf, sizeof(buf), (l.b & 4) ? "%s" : "Leave %s", s.leave_by);
+          drawTextAt(buf, l.x, l.y, size, align, own ? own : white);
         }
         break;
       case EL_WEATHER:
         if (s.wx_show && wx_part[0]) {
-          int w = runWidth(wx_part) - 1;
-          int x0 = l.b == 1 ? l.x - w / 2 : l.b == 2 ? l.x - w : l.x;
-          drawRun(wx_part, x0, l.y, own ? own : textColor(s, WX_TEXT_COLOR));
+          int ws = constrain((int)l.a, 1, 3);
+          int w = runW(wx_part, ws) - 1;
+          int x0 = align == 1 ? l.x - w / 2 : align == 2 ? l.x - w + 1 : l.x;
+          drawRunClip(wx_part, x0, l.y, ws, own ? own : textColor(s, WX_TEXT_COLOR));
         }
         break;
-      case EL_DOT:
+      case EL_DOT:   // presets put it at (2,1): the panel has dead LEDs at (0,2),(1,2) in every corner
         dma_display->fillRect(l.x, l.y, 2, 2, statusColor(s.service_status));
         break;
       case EL_CLOCK: {
         uint32_t secs = (s.clock_s + (millis() - s.updated_ms) / 1000) % 86400;
         int h = (secs / 3600) % 12;
         snprintf(buf, sizeof(buf), "%d:%02d", h ? h : 12, (int)(secs / 60 % 60));
-        drawTextAt(buf, l.x, l.y, size, l.b, own ? own : dma_display->color565(200, 200, 200));
+        drawTextAt(buf, l.x, l.y, size, align, own ? own : dma_display->color565(200, 200, 200));
         break;
       }
-      case EL_COUNTDOWN:
-        countdownText(buf, sizeof(buf), s.mins, size);
-        drawTextAt(buf, l.x, l.y, size, l.b, own ? own : timeC);
-        break;
-      case EL_COUNTDOWN2:
-        if (s.dual) { countdownText(buf, sizeof(buf), s.mins2, size); drawTextAt(buf, l.x, l.y, size, l.b, own ? own : timeC); }
-        break;
       case EL_LABEL:
-        drawTextAt(s.label, l.x, l.y, size, l.b, own ? own : white);
+        drawTextAt(s.label, l.x, l.y, size, align, own ? own : white);
         break;
       case EL_TICKER: {
         // Scrolls in [x, x+a): alerts, plus leave-by (b bit 0) and weather (bit 1).
+        int ts = constrain(((l.b >> 2) & 3) + 1, 1, 3);
         bool leave = (l.b & 1) && leave_part[0], wx = (l.b & 2) && s.wx_show && wx_part[0];
         if (!leave && !wx && !alert_part[0]) break;
         clipL = max(0, (int)l.x);
         clipR = min(PANEL_RES_X, (int)l.x + max(6, (int)l.a));
         if (tick_x[i] == INT16_MIN) tick_x[i] = clipR;
         int cx = tick_x[i];
-        if (leave) cx = drawRunClip(leave_part, cx, l.y, own ? own : white);
-        if (wx)    cx = drawRunClip(wx_part, cx, l.y, own ? own : textColor(s, WX_TEXT_COLOR)) + 12;
-        cx = drawRunClip(alert_part, cx, l.y, own ? own : textColor(s, dma_display->color565(255, 220, 0)));
+        if (leave) cx = drawRunClip(leave_part, cx, l.y, ts, own ? own : white);
+        if (wx)    cx = drawRunClip(wx_part, cx, l.y, ts, own ? own : textColor(s, WX_TEXT_COLOR)) + 12 * ts;
+        cx = drawRunClip(alert_part, cx, l.y, ts, own ? own : textColor(s, dma_display->color565(255, 220, 0)));
         tick_x[i]--;
         if (cx < clipL) tick_x[i] = clipR;
         clipL = 0; clipR = PANEL_RES_X;

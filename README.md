@@ -142,14 +142,14 @@ protects against crashes, not against firmware that runs but misbehaves.
 - **Normal:** next catchable train time (top), line bullet + scrolling text
   along the bottom in this order: "Leave by" (white), weather, service alert
   (yellow) — each only if it's turned on (and, for alerts, if there is one).
-- **Minimalist:** bullet + time centred, with a 2×2 status dot in the top-left
-  corner (green normal, yellow alerts/changes, red suspended). Leave-by, weather
-  and alerts scroll along the bottom if they're turned on.
+- **Minimalist** is now a preset in **07 Customize Layout** (bullet + time
+  centred, 2×2 status dot: green normal, yellow alerts/changes, red suspended).
+  Panels that had the old Minimalist Mode toggle on were switched to that
+  layout automatically, with a scrolling line if leave-by/alerts were on.
 - **Weather** (optional, **Display Options → Show Weather**): icon + temperature
   (°F) for the selected station, plus an **umbrella** icon when there's at least
   a 50% chance of rain in the next 12 hours (or it's raining now). Normal mode
-  shows it beside the bullet, or at the front of the scrolling text; minimalist
-  mode shows it centred under the time. Data from Open-Meteo (free, no key),
+  shows it beside the bullet, or at the front of the scrolling text. Data from Open-Meteo (free, no key),
   refreshed every 15 min; if it can't be reached the panel just hides it.
 - **Faster Route** (**Display Options → Faster Route**): pick a destination
   station and up to two more stations you can walk to (with walk times; your
@@ -200,23 +200,24 @@ protects against crashes, not against firmware that runs but misbehaves.
   and a big arrival time, right-aligned so the colons line up. A yellow/red dot
   after a time means delays/suspension on that line. Pick the second train with
   the **Train 1 / Train 2** tabs that appear above section 01 (sections 01–03
-  and 05 edit whichever tab is selected). Scroll text, weather and minimalist
-  mode are paused while it's on.
-- **Custom layout** (section **07 Customize Layout**): **Open Layout Editor**
-  shows a pixel-exact simulation of the 64×32 panel. Drag pieces around (they
-  snap to LED pixels), tap one to change its size (small/big, bullet size),
-  alignment and colour, nudge it with the arrows, or remove it. **Add** offers
-  the train time, line bullet, leave-by time, scrolling ticker (alerts, plus
-  leave-by and weather if ticked), weather, status dot, clock, minutes countdown
-  ("7 min") and a short custom label. The **One train** tab is the normal screen;
+  and 05 edit whichever tab is selected). Scroll text and weather are paused
+  while it's on (unless your custom "Two rows" layout places them).
+- **Custom layout** (section **07 Customize Layout**, collapsed until you tap
+  it): **Open Layout Editor** shows a pixel-exact simulation of the 64×32
+  panel. Drag pieces around (they snap to LED pixels), tap one to change it:
+  **A− / A+** font size for anything with text (Tiny 3×5, Small 5×7, Big,
+  Bigger, Huge; weather and the scrolling line go Small to Bigger), bullet
+  size, alignment and colour, nudge it with the arrows, or remove it. **Add**
+  offers the train time, line bullet, leave-by time, scrolling ticker (alerts,
+  plus leave-by and weather if ticked), weather, status dot, clock and a short
+  custom label. The **One train** tab is the normal screen;
   the **Two rows** tab is used whenever Two Trains or Both Directions is on and
   adds train-2 pieces. Presets (Standard, Minimalist, Two rows) are starting
   points. **Send to Panel** saves both layouts and turns **Use My Layout** on;
   the panel picks it up on its next update (~15 s). Turning the toggle off goes
   back to the built-in screens without losing your layout. Faster Route, Live
-  Scores, animations and the night schedule still take over as usual; minimalist
-  mode is ignored while a custom layout is on, and Leave By / Alerts / Weather
-  show whenever their pieces are placed.
+  Scores, animations and the night schedule still take over as usual; Leave By /
+  Alerts / Weather show whenever their pieces are placed.
 - **Demo** (**⚙ Settings → Demo Mode**): the server rotates a random line/station every 45 s — runs on the
   Pi, so it keeps going with the phone closed.
 - Train time shows `--:--` if the panel hasn't heard from the server for 3 minutes.

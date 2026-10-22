@@ -111,9 +111,11 @@ DIRECTION_LABELS.update({
 
 # ── Custom layouts (web app → 07 Customize Layout) ─────────────────────────
 # Each element: [type, x, y, a, b, color]. Must match EL_* in the firmware and
-# EL in server/static/panel-editor.js. color 0 = the element's usual colour.
+# EL in server/static/panel-editor.js (which documents a / b). color 0 = the
+# element's usual colour. Types 8 and 12 (countdowns) were removed in v7.9.
 EL = {"bullet": 1, "time": 2, "leave": 3, "ticker": 4, "weather": 5, "dot": 6, "clock": 7,
-      "countdown": 8, "label": 9, "bullet2": 10, "time2": 11, "countdown2": 12}
+      "label": 9, "bullet2": 10, "time2": 11}
+LAYOUT_V = 2       # v1 (7.8): leave a = format; v2: leave a = font size, b bit 2 = format
 LAYOUT_PRESETS = {
     "standard":   [[EL["time"], 32, 0, 2, 1, 0], [EL["bullet"], 8, 24, 7, 0, 0],
                    [EL["ticker"], 17, 20, 47, 3, 0]],
@@ -132,7 +134,6 @@ DEFAULT_CONFIG = {
     "walk_minutes":  10,
     "show_leave_by": True,
     "show_alerts":   True,
-    "minimalist":    False,
     "demo":          False,
     "brightness":    80,
     "panel_off":     False,
@@ -148,6 +149,7 @@ DEFAULT_CONFIG = {
     "layout_single": LAYOUT_PRESETS["standard"],
     "layout_two":    LAYOUT_PRESETS["two_rows"],   # used by Two Trains and Both Directions
     "layout_label":  "HOME",
+    "layout_v":      LAYOUT_V,
     "alt_routes":    False,  # suggest a faster route to alt_dest
     "alt_dest":      "",
     "alt_dest_name": "",
@@ -231,11 +233,45 @@ def config_path(panel_id: str) -> str:
     return os.path.join(DATA_DIR, f"config_{panel_id}.json")
 
 
+def migrate_config(raw: dict) -> dict:
+    """Bring a saved config up to date (in memory; saved on the next change)."""
+    if raw.get("layout_v", 1) < 2:
+        for key in ("layout_single", "layout_two"):
+            if isinstance(raw.get(key), list):
+                new = []
+                for e in raw[key]:
+                    if not isinstance(e, list) or len(e) != 6 or e[0] in (8, 12):
+                        continue                              # countdowns are gone
+                    e = list(e)
+                    if e[0] == EL["leave"]:                   # a was the format
+                        e[3], e[4] = 1, (e[4] & 3) | (4 if e[3] == 1 else 0)
+                    new.append(e)
+                raw[key] = new
+        raw["layout_v"] = LAYOUT_V
+    # Minimalist mode (removed in v7.9) becomes the Minimalist custom layout.
+    if raw.pop("minimalist", False) and not raw.get("custom_layout"):
+        lay = [list(e) for e in LAYOUT_PRESETS["minimalist"]]
+        leave = raw.get("show_leave_by", DEFAULT_CONFIG["show_leave_by"])
+        alerts = raw.get("show_alerts", DEFAULT_CONFIG["show_alerts"])
+        wx = raw.get("show_weather", DEFAULT_CONFIG["show_weather"])
+        if leave or alerts or wx:                             # second row, like before
+            lay[1][2], lay[2][2] = 13, 9
+            if leave or alerts:
+                lay.append([EL["ticker"], 0, 24, 64, (1 if leave else 0) | (2 if wx else 0), 0])
+            else:
+                lay.append([EL["weather"], 32, 24, 1, 1, 0])
+        raw["custom_layout"], raw["layout_single"] = True, lay
+    return raw
+
+
 def load_config(panel_id: str) -> dict:
     cfg = dict(DEFAULT_CONFIG)
     try:
         with open(config_path(panel_id)) as f:
-            cfg.update(json.load(f))
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            raise ValueError("config is not an object")
+        cfg.update(migrate_config(raw))
     except FileNotFoundError:
         pass
     except (OSError, ValueError):
@@ -292,7 +328,6 @@ CONFIG_SCHEMA = {
     "walk_minutes":  _int_range(0, 90),
     "show_leave_by": _bool,
     "show_alerts":   _bool,
-    "minimalist":    _bool,
     "demo":          _bool,
     "brightness":    _int_range(10, 100),
     "panel_off":     _bool,
@@ -336,13 +371,13 @@ def _alt_origins(v):
 def _layout(v):
     if not isinstance(v, list) or len(v) > MAX_LAYOUT_ELEMENTS:
         raise ValueError(f"must be a list of up to {MAX_LAYOUT_ELEMENTS} elements")
-    ranges = [(1, 12), (-10, 74), (-10, 42), (0, 64), (0, 7), (0, 65535)]
+    ranges = [(1, 11), (-10, 74), (-10, 42), (0, 64), (0, 15), (0, 65535)]
     out = []
     for e in v:
         if (not isinstance(e, list) or len(e) != 6
                 or any(isinstance(n, bool) or not isinstance(n, int) for n in e)):
             raise ValueError("each element must be 6 whole numbers")
-        if any(not lo <= n <= hi for n, (lo, hi) in zip(e, ranges)):
+        if any(not lo <= n <= hi for n, (lo, hi) in zip(e, ranges)) or e[0] not in EL.values():
             raise ValueError("element value out of range")
         out.append(list(e))
     return out
@@ -1499,17 +1534,16 @@ def fmt_time(dt: datetime) -> str:
 
 
 def train_times(panel_id: str, line: str, stop_parent: str, platform: str,
-                walk: int, now: datetime) -> tuple[str, str, str | None, int]:
-    """(train time, leave-by time, error, minutes until it leaves or -1)."""
+                walk: int, now: datetime) -> tuple[str, str, str | None]:
+    """(train time, leave-by time, error)."""
     try:
         dt = next_departure(get_feed(line), stop_parent + platform, line, walk, now)
     except Exception:
         log.exception("Train feed error (panel %s, line %s)", panel_id, line)
-        return "--:--", "", "feed", -1
+        return "--:--", "", "feed"
     if not dt:
-        return "--:--", "", None, -1
-    mins = max(0, int((dt - now).total_seconds() // 60))
-    return fmt_time(dt), fmt_time(dt - timedelta(minutes=walk)), None, mins
+        return "--:--", "", None
+    return fmt_time(dt), fmt_time(dt - timedelta(minutes=walk)), None
 
 
 @app.get("/next-trains")
@@ -1530,7 +1564,7 @@ def next_trains():
         platform = "N"          # row 1 = N (uptown etc.), row 2 = S
 
     now = datetime.now(tz=EASTERN)
-    train_time, leave_by, error, mins = train_times(panel_id, line, stop_parent, platform,
+    train_time, leave_by, error = train_times(panel_id, line, stop_parent, platform,
                                               cfg["walk_minutes"], now)
 
     alert_text, level = alert_for_line(line, now.timestamp())
@@ -1563,7 +1597,6 @@ def next_trains():
         "logo_dark":      1 if line in DARK_TEXT_LINES else 0,
         "show_leave_by":  show_leave,
         "show_alerts":    show_alerts,
-        "minimalist":     1 if cfg["minimalist"] else 0,
         "brightness":     cfg["brightness"],
         "latch_blanking": cfg["latch_blanking"],
         "panel_off":      1 if cfg["panel_off"] or night_off(cfg, now) else 0,
@@ -1587,11 +1620,10 @@ def next_trains():
     if preview.get("until", 0) > time.time():
         payload["arriving"] = preview["id"]
     # Two rows: both directions of one line, or two trains (never in demo).
-    mins2 = -1
     payload["dual"] = 0
     payload["dirs"] = 0          # 1 = rows are N/S of the same line: firmware adds arrows
     if both_dirs:
-        time2, _, error2, mins2 = train_times(panel_id, line, stop_parent, "S", cfg["walk_minutes"], now)
+        time2, _, error2 = train_times(panel_id, line, stop_parent, "S", cfg["walk_minutes"], now)
         payload.update({
             "dual":            1,
             "dirs":            1,
@@ -1605,7 +1637,7 @@ def next_trains():
         payload["error"] = payload["error"] or error2
     elif cfg["dual"] and not cfg["demo"]:
         line2 = cfg["line2"]
-        time2, _, error2, mins2 = train_times(panel_id, line2, cfg["stop_parent2"], cfg["platform2"],
+        time2, _, error2 = train_times(panel_id, line2, cfg["stop_parent2"], cfg["platform2"],
                                        cfg["walk_minutes2"], now)
         r2, g2, b2 = hex_to_rgb(LINE_COLORS.get(line2, "#888888"))
         payload.update({
@@ -1621,8 +1653,7 @@ def next_trains():
     payload.update(occasion_payload(panel_id, cfg, now))
     if layout is not None:
         payload.update({"layout": layout, "label": cfg["layout_label"],
-                        "clock_s": now.hour * 3600 + now.minute * 60 + now.second,
-                        "mins": mins, "mins2": mins2})
+                        "clock_s": now.hour * 3600 + now.minute * 60 + now.second})
     payload.update(score_payload(cfg))
     payload.update(alt_payload(cfg, now) if not payload.get("scores_only") else {"alt": 0})
     if wifi_new:

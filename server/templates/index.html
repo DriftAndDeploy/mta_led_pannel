@@ -165,7 +165,7 @@
     .alert-track { padding-left: 0; animation: none; }
   }
 
-  /* Collapsible section (04 Display Options) */
+  /* Collapsible sections (04 Display Options, 07 Customize Layout) */
   .collapse-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     width: 100%; background: none; border: none; padding: 0; margin-bottom: 14px;
@@ -991,6 +991,9 @@
     color: var(--muted); font-family: inherit; font-size: 11px; cursor: pointer;
   }
   .prop-btn.on { background: #8ecbff; border-color: #8ecbff; color: #0d0d0d; }
+  .prop-btn:disabled { opacity: .3; cursor: default; }
+  .prop-btn.font-step { min-width: 44px; font-size: 13px; color: var(--text); }
+  .prop-row > span.font-size-name { min-width: 60px; text-align: center; font-size: 12px; color: var(--text); letter-spacing: .5px; }
   .prop-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
   .prop-swatch.on { border-color: #8ecbff; box-shadow: 0 0 0 2px var(--bg) inset; }
   .prop-swatch.default { background: conic-gradient(#fff 0 25%, #ffdc00 0 50%, #32a0ff 0 75%, #ff4040 0); }
@@ -1310,22 +1313,12 @@
     <label>OFF AT<input type="time" id="night-start" value="01:00" onchange="saveNightTimes()"></label>
     <label>ON AT<input type="time" id="night-end" value="06:00" onchange="saveNightTimes()"></label>
   </div>
-  <div class="toggle-row">
-    <div>
-      <span class="toggle-label">Minimalist Mode</span>
-      <div class="toggle-hint">Logo + time centered · status dot · leave-by &amp; alerts scroll underneath if on</div>
-    </div>
-    <label class="toggle-switch">
-      <input type="checkbox" id="toggle-minimalist" onchange="updateMinimalistUI()">
-      <span class="toggle-track"><span class="toggle-thumb"></span></span>
-    </label>
-  </div>
   <div class="custom-note toggle-hint" id="custom-note">
-    Your custom layout (07) is on: leave-by, alerts, weather and minimalist follow what you placed there.
+    Your custom layout (07) is on: leave-by, alerts and weather follow what you placed there.
   </div>
   <div class="dual-note toggle-hint" id="dual-note" style="display:none; margin-top:12px">
     <span id="dual-note-mode">Two Trains</span> is on: the panel shows two times, so leave-by,
-    alerts, weather and minimalist mode are paused. Service problems show as a dot next to the time.
+    alerts and weather are paused. Service problems show as a dot next to the time.
   </div>
   </div></div>
 </div>
@@ -1363,9 +1356,15 @@
   </div>
 </div>
 
-<!-- Custom layout -->
-<div class="section">
-  <div class="section-label">07 — Customize Layout</div>
+<!-- Custom layout (collapsible; starts collapsed) -->
+<div class="section collapsed" id="layout-section">
+  <button class="collapse-head" onclick="toggleLayoutSection()" aria-expanded="false" aria-controls="layout-body">
+    <span class="section-label">07 — Customize Layout</span>
+    <svg class="collapse-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  </button>
+  <div class="collapse-summary" id="layout-summary" onclick="toggleLayoutSection()">—</div>
+  <div class="collapse-body" id="layout-body"><div>
   <div class="toggle-row">
     <div>
       <span class="toggle-label">Use My Layout</span>
@@ -1380,6 +1379,7 @@
   <canvas id="layout-mini" class="layout-mini" width="512" height="256" onclick="openEditor()"
           aria-label="Preview of your layout"></canvas>
   <button class="settings-link-btn editor-open" id="editor-open" onclick="openEditor()">OPEN LAYOUT EDITOR</button>
+  </div></div>
 </div>
 
 <button class="save-btn" id="save-btn" onclick="saveConfig()">SAVE TO PANEL</button>
@@ -1880,7 +1880,6 @@ async function init() {
   document.getElementById('latch-val').textContent = latchBlanking;
   document.getElementById('toggle-leave-by').checked   = cfg.show_leave_by !== false;
   document.getElementById('toggle-alerts').checked     = cfg.show_alerts !== false;
-  document.getElementById('toggle-minimalist').checked = !!cfg.minimalist;
   document.getElementById('toggle-demo').checked       = !!cfg.demo;
   document.getElementById('toggle-weather').checked    = !!cfg.show_weather;
   document.getElementById('toggle-dual').checked       = dualOn;
@@ -1905,7 +1904,7 @@ async function init() {
   updateNightUI();
   refreshWeatherHint();
   document.getElementById('demo-banner').classList.toggle('show', !!cfg.demo);
-  updateMinimalistUI();
+  updateOptionsUI();
   updatePowerButton();
   setBrightnessUI(cfg.brightness || 80);
   setTimeColor(rgbToHex(cfg.time_r ?? 255, cfg.time_g ?? 255, cfg.time_b ?? 255));
@@ -2031,15 +2030,13 @@ function updatePlatformUI() {
 
 // ── Options ───────────────────────────────────────────────────────────────
 // Dim the options the panel isn't showing right now.
-function updateMinimalistUI() {
-  const minimal = document.getElementById('toggle-minimalist').checked;
+function updateOptionsUI() {
   const dim = (id, off) =>
     document.getElementById(id).closest('.toggle-row').style.opacity = off ? '0.35' : '1';
   const twoRows = dualOn || bothOn;
   const custom = document.getElementById('toggle-custom').checked;   // layout decides these
   dim('toggle-leave-by', twoRows || custom);
   dim('toggle-alerts', twoRows || custom);
-  dim('toggle-minimalist', twoRows || custom);
   dim('toggle-weather', twoRows || custom);
   document.getElementById('custom-note').classList.toggle('show', custom);
   drawMiniPreview();
@@ -2058,13 +2055,13 @@ async function onBothDirs(on) {
     update.dual = false;
   }
   bothOn = on;
-  updateMinimalistUI();
+  updateOptionsUI();
   updatePreview();
   const [n, s] = DIRECTIONS[trains[0]?.line || selectedLine] || ['N', 'S'];
   if (!await patchConfig(update, on ? `Both directions on (↑ ${n})` : 'Both directions off')) {
     bothOn = !on;
     document.getElementById('toggle-both').checked = !on;
-    updateMinimalistUI();
+    updateOptionsUI();
     updatePreview();
   }
 }
@@ -2082,10 +2079,19 @@ function toggleOptions() {
   setOptionsCollapsed(!document.getElementById('options-section').classList.contains('collapsed'));
 }
 
+// 07 Customize Layout starts collapsed on every visit.
+function toggleLayoutSection() {
+  const sec = document.getElementById('layout-section');
+  const collapsed = !sec.classList.contains('collapsed');
+  sec.classList.toggle('collapsed', collapsed);
+  sec.querySelector('.collapse-head').setAttribute('aria-expanded', String(!collapsed));
+  if (!collapsed) drawMiniPreview();
+}
+
 // One line saying what the panel is actually showing, for the collapsed view.
 function updateOptionsSummary() {
   const on = id => document.getElementById(id).checked;
-  const twoRows = dualOn || bothOn, minimal = on('toggle-minimalist');
+  const twoRows = dualOn || bothOn, custom = on('toggle-custom');
   const parts = [];
   if (on('toggle-scores')) {                       // scores only: nothing train-related shows
     const lg = [on('scores-mlb') && 'MLB', on('scores-nba') && 'NBA'].filter(Boolean).join('/');
@@ -2099,10 +2105,10 @@ function updateOptionsSummary() {
   }
   if (dualOn) parts.push('Two trains');
   if (bothOn) parts.push('Both directions');
-  if (!twoRows && minimal) parts.push('Minimalist');
-  if (!twoRows && on('toggle-leave-by')) parts.push('Leave by');
-  if (!twoRows && on('toggle-alerts')) parts.push('Alerts');
-  if (!twoRows && on('toggle-weather')) parts.push('Weather');
+  if (custom) parts.push('My layout');
+  if (!twoRows && !custom && on('toggle-leave-by')) parts.push('Leave by');
+  if (!twoRows && !custom && on('toggle-alerts')) parts.push('Alerts');
+  if (!twoRows && !custom && on('toggle-weather')) parts.push('Weather');
   if (on('toggle-alt') && altCfg.dest) parts.push(`Faster route → ${altCfg.dest.name.replace(/ \(.*\)$/, '')}`);
   if (on('toggle-animations')) parts.push('Animations');
   if (on('toggle-night')) {
@@ -2158,7 +2164,7 @@ function updateDualUI() {
   [0, 1].forEach(i =>
     document.getElementById(`train-tab-${i}`).classList.toggle('selected', i === activeTrain));
   updateTrainTabs();
-  updateMinimalistUI();
+  updateOptionsUI();
 }
 
 function updateTrainTabs() {
@@ -2231,10 +2237,16 @@ function currentLayout() { return layouts[editorMode]; }
 
 function drawMiniPreview() {
   const mode = (dualOn || bothOn) ? 'two' : 'single';
-  const { frame } = PanelSim.render(layouts[mode], sampleData(), 0);
+  // frame 60: scrolling text has had time to come on screen
+  const { frame } = PanelSim.render(layouts[mode], sampleData(), 60);
   PanelSim.paint(document.getElementById('layout-mini'), frame);
   document.getElementById('editor-open').textContent =
     layoutDirty ? 'OPEN LAYOUT EDITOR · NOT SENT YET' : 'OPEN LAYOUT EDITOR';
+  const on = document.getElementById('toggle-custom').checked;
+  document.getElementById('layout-summary').innerHTML = on
+    ? `On: <b>your layout</b> (${mode === 'two' ? 'two rows' : 'one train'}, ${layouts[mode].length} pieces)` +
+      (layoutDirty ? ' · <b>changes not sent</b>' : '')
+    : 'Off · the panel uses the built-in screens' + (layoutDirty ? ' · <b>changes not sent</b>' : '');
 }
 
 function openEditor() {
@@ -2298,14 +2310,18 @@ function renderEditorSide() {
   if (kind === 'bullet') {
     html += `<div class="prop-row"><span>SIZE</span>${[[5, 'S'], [6, 'M'], [7, 'L']].map(([r, n]) => btn(n, e[3] === r, `setProp(3,${r})`)).join('')}</div>`;
   }
-  if (PS.SIZED.has(t)) {
-    html += `<div class="prop-row"><span>SIZE</span>${btn('Small', e[3] !== 2, 'setProp(3,1)')}${btn('Big', e[3] === 2, 'setProp(3,2)')}</div>`;
+  if (PS.SIZES[t]) {                                    // font size: A- / A+
+    const [lo, hi] = PS.SIZES[t], sz = PS.getSize(e);
+    html += `<div class="prop-row"><span>FONT</span>
+      <button class="prop-btn font-step" onclick="changeSize(-1)" ${sz <= lo ? 'disabled' : ''} aria-label="Smaller text">A−</button>
+      <span class="font-size-name">${PS.SIZE_NAMES[sz]}</span>
+      <button class="prop-btn font-step" onclick="changeSize(1)" ${sz >= hi ? 'disabled' : ''} aria-label="Bigger text">A+</button></div>`;
   }
   if (kind === 'text') {
-    html += `<div class="prop-row"><span>ALIGN</span>${[[0, 'Left'], [1, 'Center'], [2, 'Right']].map(([a, n]) => btn(n, e[4] === a, `setProp(4,${a})`)).join('')}</div>`;
+    html += `<div class="prop-row"><span>ALIGN</span>${[[0, 'Left'], [1, 'Center'], [2, 'Right']].map(([a, n]) => btn(n, (e[4] & 3) === a, `setAlign(${a})`)).join('')}</div>`;
   }
   if (t === PS.EL.leave) {
-    html += `<div class="prop-row"><span>SHOW</span>${btn('Leave 8:32', e[3] !== 1, 'setProp(3,0)')}${btn('8:32', e[3] === 1, 'setProp(3,1)')}</div>`;
+    html += `<div class="prop-row"><span>SHOW</span>${btn('Leave 8:32', !(e[4] & 4), 'setLeaveShort(false)')}${btn('8:32', e[4] & 4, 'setLeaveShort(true)')}</div>`;
   }
   if (t === PS.EL.label) {
     html += `<div class="prop-row"><span>TEXT</span><input type="text" maxlength="15" value="${escapeHtml(layoutLabel)}"
@@ -2329,16 +2345,38 @@ function renderEditorSide() {
 function setProp(i, v, quiet) {
   const e = currentLayout()[editorSel];
   if (!e) return;
-  const kind = PanelSim.EL_INFO[e[0]].kind;
-  const before = boxOf(editorSel);
   e[i] = v;
-  if (i === 4 && kind === 'text' && before) {         // re-anchor so the text doesn't jump
-    const [left, , w] = before;
-    e[1] = v === 0 ? left : v === 1 ? left + Math.trunc(w / 2) : left + w - 1;
-  }
-  if (i === 3) keepInside();                           // bigger text/bullet stays on the panel
+  if (i === 3) keepInside();                           // bigger bullet / wider ticker stays on the panel
   layoutDirty = true;
   if (!quiet) renderEditorSide();
+}
+
+function setAlign(a) {                                 // re-anchor so the text doesn't jump
+  const e = currentLayout()[editorSel], before = boxOf(editorSel);
+  if (!e) return;
+  e[4] = (e[4] & ~3) | a;
+  if (before) {
+    const [left, , w] = before;
+    e[1] = a === 0 ? left : a === 1 ? left + Math.trunc(w / 2) : left + w - 1;
+  }
+  changed();
+}
+
+function setLeaveShort(on) {
+  const e = currentLayout()[editorSel];
+  if (!e) return;
+  e[4] = (e[4] & 3) | (on ? 4 : 0);
+  keepInside();
+  changed();
+}
+
+function changeSize(d) {                               // grows from its anchor, then stays on the panel
+  const e = currentLayout()[editorSel];
+  if (!e) return;
+  const cur = PanelSim.getSize(e);
+  if (PanelSim.setSize(e, cur + d) === cur) return;
+  keepInside();
+  changed();
 }
 
 function boxOf(i) { return PanelSim.render(currentLayout(), sampleData(), 0).boxes[i]; }
@@ -2410,7 +2448,7 @@ async function sendLayout() {
   if (ok) {
     layoutDirty = false;
     document.getElementById('toggle-custom').checked = true;
-    updateMinimalistUI();
+    updateOptionsUI();
     closeEditor();
   }
 }
@@ -2419,7 +2457,7 @@ async function saveCustomToggle(on) {
   if (!await patchConfig({ custom_layout: on }, on ? 'Your layout is on — the panel switches within 15 s' : 'Built-in layouts are back')) {
     document.getElementById('toggle-custom').checked = !on;
   }
-  updateMinimalistUI();
+  updateOptionsUI();
 }
 
 // ── Faster route ──────────────────────────────────────────────────────────
@@ -2565,7 +2603,7 @@ function updateScoresUI() {
   if (!on) document.getElementById('scores-hint').textContent = SCORES_HINT;
   // Scores only: lock everything about trains so it's clear what the panel shows.
   const rows = ['toggle-dual', 'toggle-both', 'toggle-leave-by', 'toggle-alerts', 'toggle-weather',
-                'toggle-animations', 'toggle-minimalist', 'toggle-alt'];
+                'toggle-animations', 'toggle-alt'];
   document.getElementById('alt-config').classList.toggle('locked', on);
   document.getElementById('layout-mini').closest('.section').classList.toggle('locked', on);
   rows.forEach(id => document.getElementById(id).closest('.toggle-row').classList.toggle('locked', on));
@@ -2950,7 +2988,6 @@ async function saveConfig() {
     dual:          dualOn,
     show_leave_by: document.getElementById('toggle-leave-by').checked,
     show_alerts:   document.getElementById('toggle-alerts').checked,
-    minimalist:    document.getElementById('toggle-minimalist').checked,
     time_r: r, time_g: g, time_b: b,
     color_all:     document.getElementById('toggle-color-all').checked,
   };
