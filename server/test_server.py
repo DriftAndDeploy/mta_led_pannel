@@ -790,6 +790,45 @@ class AltRoutes(unittest.TestCase):
         self.assertEqual(ps.base_line("SI"), "SI")
 
 
+class CustomLayout(unittest.TestCase):
+    def test_validation(self):
+        c = ps.app.test_client()
+        ok = [[2, 32, 0, 2, 1, 0], [4, 17, 20, 47, 3, 0xF800]]
+        r = c.post("/api/config?panel_id=CL0001", json={"layout_single": ok, "custom_layout": True})
+        self.assertEqual(r.status_code, 200)
+        for bad in ([[13, 0, 0, 0, 0, 0]], [[2, 0, 0, 0, 0]], [[2, 99, 0, 0, 0, 0]], [[2, 0, 0, True, 0, 0]],
+                    [[2, 0, 0, 1, 0, 0]] * 17, "nope"):
+            self.assertEqual(c.post("/api/config?panel_id=CL0001", json={"layout_single": bad}).status_code, 400)
+
+    def test_payload_layout_data_and_mode(self):
+        c = ps.app.test_client()
+        feed = fake_feed("L14N", [at(10, 25)])
+        layout = [[ps.EL["time"], 32, 0, 2, 1, 0], [ps.EL["leave"], 0, 24, 0, 0, 0],
+                  [ps.EL["countdown"], 63, 24, 1, 2, 0], [ps.EL["clock"], 0, 0, 1, 0, 0]]
+        c.post("/api/config?panel_id=CL0002", json={"custom_layout": True, "layout_single": layout,
+               "show_leave_by": False, "show_alerts": True, "layout_label": "HOME"})
+        with mock.patch.object(ps, "get_feed", return_value=feed), \
+             mock.patch.object(ps, "alert_for_line", return_value=("L delays", 1)), \
+             mock.patch.object(ps, "datetime") as dt:
+            dt.now.return_value = at(10, 10)
+            j = c.get("/next-trains?panel_id=CL0002").get_json()
+            c.post("/api/config?panel_id=CL0002", json={"dual": True})
+            two = c.get("/next-trains?panel_id=CL0002").get_json()
+            c.post("/api/config?panel_id=CL0002", json={"custom_layout": False, "dual": False})
+            off = c.get("/next-trains?panel_id=CL0002").get_json()
+        self.assertEqual(j["layout"], layout)
+        self.assertEqual((j["leave_by"], j["show_leave_by"]), ("10:15", True))   # layout has a leave element
+        self.assertEqual((j["alert_msg"], j["show_alerts"]), ("", False))        # ...but no ticker
+        self.assertEqual((j["mins"], j["clock_s"], j["label"]), (15, 10 * 3600 + 10 * 60, "HOME"))
+        self.assertEqual(two["layout"], ps.LAYOUT_PRESETS["two_rows"])            # two-row modes use layout_two
+        self.assertNotIn("layout", off)
+        self.assertEqual(off["leave_by"], "")                                     # back to the toggles
+
+    def test_presets_are_valid(self):
+        for name, lay in ps.LAYOUT_PRESETS.items():
+            self.assertEqual(ps._layout(lay), lay, name)
+
+
 class Firmware(unittest.TestCase):
     def setUp(self):
         self.client = ps.app.test_client()

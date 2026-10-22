@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.7.0"
-#define FW_BUILD   770
+#define FW_VERSION "7.8.0"
+#define FW_BUILD   780
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -102,6 +102,13 @@ struct PanelState {
   uint8_t  occasion       = 0;      // OCC_* holiday/season animation (0 = none)
   char     occasion_label[24] = "";
   uint32_t occasion_seq   = 0;      // changes -> play now (previews)
+  // Custom layout (web app editor): elements placed by the user
+  bool     custom         = false;
+  uint8_t  n_el           = 0;
+  struct { uint8_t type; int8_t x, y; uint8_t a, b; uint16_t color; } el[16];
+  char     label[16]      = "";     // text for the label element
+  uint32_t clock_s        = 0;      // NYC seconds since midnight at the last poll
+  int16_t  mins = -1, mins2 = -1;   // minutes until train 1 / train 2 leaves
   // Faster route (Alternate Routes on, and it saves 5+ min)
   bool     alt            = false;
   char     alt_line[4]    = "";
@@ -185,6 +192,7 @@ uint16_t textColor(const PanelState& s, uint16_t normal);
 void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
 void drawScores(const PanelState& s, bool stale);
 void drawAlt(const PanelState& s);
+void drawCustom(const PanelState& s);
 void drawStatusDot(uint8_t status);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -203,6 +211,13 @@ void buildWeatherText(const PanelState& s);
 #define CH_DEGREE   '\x11'
 #define CH_GAP      '\x12'   // 3 px spacer
 #define WX_TEXT_COLOR dma_display->color565(150, 200, 255)
+
+// Pixel with an optional horizontal clip window (used by scrolling text in
+// custom layouts so it can't spill over neighbouring elements).
+static int clipL = 0, clipR = 64;
+static inline void cpx(int x, int y, uint16_t c) {
+  if (x >= clipL && x < clipR && y >= 0 && y < 32) dma_display->drawPixel(x, y, c);
+}
 
 void drawTestPattern();
 void drawOtaScreen();
@@ -631,6 +646,19 @@ bool fetchTrainTimes() {
   n.occasion       = doc["occasion"] | 0;
   copyStr(n.occasion_label, sizeof(n.occasion_label), doc["occasion_label"] | "");
   n.occasion_seq   = doc["occasion_seq"] | 0u;
+  JsonArray lay = doc["layout"];
+  n.custom = !lay.isNull();
+  n.n_el = 0;
+  for (JsonArray e : lay) {
+    if (n.n_el >= 16) break;
+    auto& l = n.el[n.n_el++];
+    l.type = e[0] | 0; l.x = e[1] | 0; l.y = e[2] | 0;
+    l.a = e[3] | 0;    l.b = e[4] | 0; l.color = e[5] | 0;
+  }
+  copyStr(n.label, sizeof(n.label), doc["label"] | "");
+  n.clock_s = doc["clock_s"] | 0u;
+  n.mins    = doc["mins"]  | -1;
+  n.mins2   = doc["mins2"] | -1;
   n.alt            = (doc["alt"] | 0) != 0;
   copyStr(n.alt_line, sizeof(n.alt_line), doc["alt_line"] | "");
   copyStr(n.alt_time, sizeof(n.alt_time), doc["alt_time"] | "");
@@ -839,6 +867,7 @@ void render(const PanelState& in) {
 
   dma_display->clearScreen();
   if (s.alt)             drawAlt(s);
+  else if (s.custom)     drawCustom(s);
   else if (s.dual)       drawDual(s);
   else if (s.minimalist) drawMinimalist(s);
   else                   drawNormal(s);
@@ -1553,7 +1582,7 @@ static const uint8_t BMP_HANDLE[4]   = {0x08, 0x08, 0x28, 0x10};               /
 static void drawBits(int x, int y, const uint8_t* rows, uint8_t n, uint16_t c) {
   for (uint8_t r = 0; r < n; r++)
     for (uint8_t b = 0; b < 7; b++)
-      if (rows[r] & (0x40 >> b)) dma_display->drawPixel(x + b, y + r, c);
+      if (rows[r] & (0x40 >> b)) cpx(x + b, y + r, c);
 }
 
 static void drawWxIcon(int x, int y, uint8_t icon) {
@@ -1622,6 +1651,248 @@ void buildWeatherText(const PanelState& s) {
     wx_part[n++] = CH_GAP;
     wx_part[n++] = CH_UMBRELLA;
     wx_part[n] = '\0';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Custom layout (web app → 07 Customize Layout). The server sends the
+// elements for the current mode as [type, x, y, a, b, color]; colour 0 means
+// the element's usual colour. Positions are what the web app's simulator
+// shows (it uses these same drawing rules and the same 5x7 font).
+//   x,y: bullets = centre; text = anchor (b: 0 left, 1 centre, 2 right) + top
+//   a:   bullet radius 4-7 | text size 1-2 | ticker width | leave format
+// ---------------------------------------------------------------------------
+enum {
+  EL_BULLET = 1, EL_TIME, EL_LEAVE, EL_TICKER, EL_WEATHER, EL_DOT, EL_CLOCK,
+  EL_COUNTDOWN, EL_LABEL, EL_BULLET2, EL_TIME2, EL_COUNTDOWN2
+};
+
+// Classic 5x7 font, ASCII 32-126 (from Adafruit GFX glcdfont.c, BSD licence),
+// so scrolling text can be clipped pixel by pixel.
+static const uint8_t FONT5X7[95][5] = {
+  {0x00, 0x00, 0x00, 0x00, 0x00},  // ' '
+  {0x00, 0x00, 0x5F, 0x00, 0x00},  // '!'
+  {0x00, 0x07, 0x00, 0x07, 0x00},  // '"'
+  {0x14, 0x7F, 0x14, 0x7F, 0x14},  // '#'
+  {0x24, 0x2A, 0x7F, 0x2A, 0x12},  // '$'
+  {0x23, 0x13, 0x08, 0x64, 0x62},  // '%'
+  {0x36, 0x49, 0x56, 0x20, 0x50},  // '&'
+  {0x00, 0x08, 0x07, 0x03, 0x00},  // "'"
+  {0x00, 0x1C, 0x22, 0x41, 0x00},  // '('
+  {0x00, 0x41, 0x22, 0x1C, 0x00},  // ')'
+  {0x2A, 0x1C, 0x7F, 0x1C, 0x2A},  // '*'
+  {0x08, 0x08, 0x3E, 0x08, 0x08},  // '+'
+  {0x00, 0x80, 0x70, 0x30, 0x00},  // ','
+  {0x08, 0x08, 0x08, 0x08, 0x08},  // '-'
+  {0x00, 0x00, 0x60, 0x60, 0x00},  // '.'
+  {0x20, 0x10, 0x08, 0x04, 0x02},  // '/'
+  {0x3E, 0x51, 0x49, 0x45, 0x3E},  // '0'
+  {0x00, 0x42, 0x7F, 0x40, 0x00},  // '1'
+  {0x72, 0x49, 0x49, 0x49, 0x46},  // '2'
+  {0x21, 0x41, 0x49, 0x4D, 0x33},  // '3'
+  {0x18, 0x14, 0x12, 0x7F, 0x10},  // '4'
+  {0x27, 0x45, 0x45, 0x45, 0x39},  // '5'
+  {0x3C, 0x4A, 0x49, 0x49, 0x31},  // '6'
+  {0x41, 0x21, 0x11, 0x09, 0x07},  // '7'
+  {0x36, 0x49, 0x49, 0x49, 0x36},  // '8'
+  {0x46, 0x49, 0x49, 0x29, 0x1E},  // '9'
+  {0x00, 0x00, 0x14, 0x00, 0x00},  // ':'
+  {0x00, 0x40, 0x34, 0x00, 0x00},  // ';'
+  {0x00, 0x08, 0x14, 0x22, 0x41},  // '<'
+  {0x14, 0x14, 0x14, 0x14, 0x14},  // '='
+  {0x00, 0x41, 0x22, 0x14, 0x08},  // '>'
+  {0x02, 0x01, 0x59, 0x09, 0x06},  // '?'
+  {0x3E, 0x41, 0x5D, 0x59, 0x4E},  // '@'
+  {0x7C, 0x12, 0x11, 0x12, 0x7C},  // 'A'
+  {0x7F, 0x49, 0x49, 0x49, 0x36},  // 'B'
+  {0x3E, 0x41, 0x41, 0x41, 0x22},  // 'C'
+  {0x7F, 0x41, 0x41, 0x41, 0x3E},  // 'D'
+  {0x7F, 0x49, 0x49, 0x49, 0x41},  // 'E'
+  {0x7F, 0x09, 0x09, 0x09, 0x01},  // 'F'
+  {0x3E, 0x41, 0x41, 0x51, 0x73},  // 'G'
+  {0x7F, 0x08, 0x08, 0x08, 0x7F},  // 'H'
+  {0x00, 0x41, 0x7F, 0x41, 0x00},  // 'I'
+  {0x20, 0x40, 0x41, 0x3F, 0x01},  // 'J'
+  {0x7F, 0x08, 0x14, 0x22, 0x41},  // 'K'
+  {0x7F, 0x40, 0x40, 0x40, 0x40},  // 'L'
+  {0x7F, 0x02, 0x1C, 0x02, 0x7F},  // 'M'
+  {0x7F, 0x04, 0x08, 0x10, 0x7F},  // 'N'
+  {0x3E, 0x41, 0x41, 0x41, 0x3E},  // 'O'
+  {0x7F, 0x09, 0x09, 0x09, 0x06},  // 'P'
+  {0x3E, 0x41, 0x51, 0x21, 0x5E},  // 'Q'
+  {0x7F, 0x09, 0x19, 0x29, 0x46},  // 'R'
+  {0x26, 0x49, 0x49, 0x49, 0x32},  // 'S'
+  {0x03, 0x01, 0x7F, 0x01, 0x03},  // 'T'
+  {0x3F, 0x40, 0x40, 0x40, 0x3F},  // 'U'
+  {0x1F, 0x20, 0x40, 0x20, 0x1F},  // 'V'
+  {0x3F, 0x40, 0x38, 0x40, 0x3F},  // 'W'
+  {0x63, 0x14, 0x08, 0x14, 0x63},  // 'X'
+  {0x03, 0x04, 0x78, 0x04, 0x03},  // 'Y'
+  {0x61, 0x59, 0x49, 0x4D, 0x43},  // 'Z'
+  {0x00, 0x7F, 0x41, 0x41, 0x41},  // '['
+  {0x02, 0x04, 0x08, 0x10, 0x20},  // '\\'
+  {0x00, 0x41, 0x41, 0x41, 0x7F},  // ']'
+  {0x04, 0x02, 0x01, 0x02, 0x04},  // '^'
+  {0x40, 0x40, 0x40, 0x40, 0x40},  // '_'
+  {0x00, 0x03, 0x07, 0x08, 0x00},  // '`'
+  {0x20, 0x54, 0x54, 0x78, 0x40},  // 'a'
+  {0x7F, 0x28, 0x44, 0x44, 0x38},  // 'b'
+  {0x38, 0x44, 0x44, 0x44, 0x28},  // 'c'
+  {0x38, 0x44, 0x44, 0x28, 0x7F},  // 'd'
+  {0x38, 0x54, 0x54, 0x54, 0x18},  // 'e'
+  {0x00, 0x08, 0x7E, 0x09, 0x02},  // 'f'
+  {0x18, 0xA4, 0xA4, 0x9C, 0x78},  // 'g'
+  {0x7F, 0x08, 0x04, 0x04, 0x78},  // 'h'
+  {0x00, 0x44, 0x7D, 0x40, 0x00},  // 'i'
+  {0x20, 0x40, 0x40, 0x3D, 0x00},  // 'j'
+  {0x7F, 0x10, 0x28, 0x44, 0x00},  // 'k'
+  {0x00, 0x41, 0x7F, 0x40, 0x00},  // 'l'
+  {0x7C, 0x04, 0x78, 0x04, 0x78},  // 'm'
+  {0x7C, 0x08, 0x04, 0x04, 0x78},  // 'n'
+  {0x38, 0x44, 0x44, 0x44, 0x38},  // 'o'
+  {0xFC, 0x18, 0x24, 0x24, 0x18},  // 'p'
+  {0x18, 0x24, 0x24, 0x18, 0xFC},  // 'q'
+  {0x7C, 0x08, 0x04, 0x04, 0x08},  // 'r'
+  {0x48, 0x54, 0x54, 0x54, 0x24},  // 's'
+  {0x04, 0x04, 0x3F, 0x44, 0x24},  // 't'
+  {0x3C, 0x40, 0x40, 0x20, 0x7C},  // 'u'
+  {0x1C, 0x20, 0x40, 0x20, 0x1C},  // 'v'
+  {0x3C, 0x40, 0x30, 0x40, 0x3C},  // 'w'
+  {0x44, 0x28, 0x10, 0x28, 0x44},  // 'x'
+  {0x4C, 0x90, 0x90, 0x90, 0x7C},  // 'y'
+  {0x44, 0x64, 0x54, 0x4C, 0x44},  // 'z'
+  {0x00, 0x08, 0x36, 0x41, 0x00},  // '{'
+  {0x00, 0x00, 0x77, 0x00, 0x00},  // '|'
+  {0x00, 0x41, 0x36, 0x08, 0x00},  // '}'
+  {0x02, 0x01, 0x02, 0x04, 0x02},  // '~'
+};
+
+static void glyph(char ch, int x, int y, uint16_t c) {
+  if (ch < 32 || ch > 126) return;
+  const uint8_t* g = FONT5X7[ch - 32];
+  for (int col = 0; col < 5; col++)
+    for (int row = 0; row < 8; row++)              // 8 rows, like Adafruit's drawChar
+      if (g[col] & (1 << row)) cpx(x + col, y + row, c);
+}
+
+// drawRun() with clipping: same advance rules, icons included.
+static int drawRunClip(const char* text, int x, int y, uint16_t color) {
+  for (const char* p = text; *p; p++) {
+    char c = *p;
+    int adv = glyphAdvance(c);
+    if (x > clipL - adv && x < clipR) {
+      if (c >= WX_SUN && c <= WX_STORM) drawWxIcon(x, y, c);
+      else if (c == CH_UMBRELLA)        drawUmbrella(x, y);
+      else if (c == CH_DEGREE)          { for (int i = 0; i < 3; i++) { cpx(x + i, y, color); cpx(x + i, y + 2, color); }
+                                          cpx(x, y + 1, color); cpx(x + 2, y + 1, color); }
+      else if (c != CH_GAP)             glyph(c, x, y, color);
+    }
+    x += adv;
+  }
+  return x;
+}
+
+static uint16_t statusColor(uint8_t st) {
+  return st == 2 ? dma_display->color565(220, 40, 40) : st == 1 ? dma_display->color565(255, 200, 0)
+                                                      : dma_display->color565(0, 200, 80);
+}
+
+// Text at an anchor: size 1 = 5x7 font, size 2 = the big 2x digits.
+static void drawTextAt(const char* t, int x, int y, int size, int align, uint16_t c) {
+  if (!t[0]) return;
+  int w = size >= 2 ? bigTimeWidth(t) : (int)strlen(t) * 6 - 1;
+  int x0 = align == 1 ? x - w / 2 : align == 2 ? x - w + 1 : x;
+  if (size >= 2) {
+    drawBigTime(x0, y, t, c);
+  } else {
+    dma_display->setTextSize(1);
+    dma_display->setTextColor(c);
+    dma_display->setCursor(x0, y);
+    dma_display->print(t);
+  }
+}
+
+static void countdownText(char* out, size_t n, int mins, int size) {
+  if (mins < 0)       snprintf(out, n, "--");
+  else if (mins == 0) snprintf(out, n, "Now");
+  else                snprintf(out, n, size >= 2 ? "%dm" : "%d min", mins);
+}
+
+void drawCustom(const PanelState& s) {
+  static int16_t tick_x[16];
+  static bool tick_init = false;
+  if (!tick_init) { for (auto& t : tick_x) t = INT16_MIN; tick_init = true; }
+  uint16_t timeC  = dma_display->color565(s.time_r, s.time_g, s.time_b);
+  uint16_t white  = textColor(s, dma_display->color565(255, 255, 255));
+  char buf[24];
+
+  for (int i = 0; i < s.n_el; i++) {
+    const auto& l = s.el[i];
+    uint16_t own = l.color;                        // 0 = usual colour
+    int size = constrain((int)l.a, 1, 2);
+    switch (l.type) {
+      case EL_BULLET:
+        drawBullet(l.x, l.y, constrain((int)l.a, 4, 7), s.line, s.logo_r, s.logo_g, s.logo_b);
+        break;
+      case EL_BULLET2:
+        if (s.dual) drawBullet(l.x, l.y, constrain((int)l.a, 4, 7), s.line2, s.logo2_r, s.logo2_g, s.logo2_b);
+        break;
+      case EL_TIME:
+        drawTextAt(s.train_time, l.x, l.y, size, l.b, own ? own : timeC);
+        break;
+      case EL_TIME2:
+        if (s.dual) drawTextAt(s.train_time2, l.x, l.y, size, l.b, own ? own : timeC);
+        break;
+      case EL_LEAVE:
+        if (s.leave_by[0] && strcmp(s.leave_by, "--:--")) {
+          snprintf(buf, sizeof(buf), l.a == 1 ? "%s" : "Leave %s", s.leave_by);
+          drawTextAt(buf, l.x, l.y, 1, l.b, own ? own : white);
+        }
+        break;
+      case EL_WEATHER:
+        if (s.wx_show && wx_part[0]) {
+          int w = runWidth(wx_part) - 1;
+          int x0 = l.b == 1 ? l.x - w / 2 : l.b == 2 ? l.x - w : l.x;
+          drawRun(wx_part, x0, l.y, own ? own : textColor(s, WX_TEXT_COLOR));
+        }
+        break;
+      case EL_DOT:
+        dma_display->fillRect(l.x, l.y, 2, 2, statusColor(s.service_status));
+        break;
+      case EL_CLOCK: {
+        uint32_t secs = (s.clock_s + (millis() - s.updated_ms) / 1000) % 86400;
+        int h = (secs / 3600) % 12;
+        snprintf(buf, sizeof(buf), "%d:%02d", h ? h : 12, (int)(secs / 60 % 60));
+        drawTextAt(buf, l.x, l.y, size, l.b, own ? own : dma_display->color565(200, 200, 200));
+        break;
+      }
+      case EL_COUNTDOWN:
+        countdownText(buf, sizeof(buf), s.mins, size);
+        drawTextAt(buf, l.x, l.y, size, l.b, own ? own : timeC);
+        break;
+      case EL_COUNTDOWN2:
+        if (s.dual) { countdownText(buf, sizeof(buf), s.mins2, size); drawTextAt(buf, l.x, l.y, size, l.b, own ? own : timeC); }
+        break;
+      case EL_LABEL:
+        drawTextAt(s.label, l.x, l.y, size, l.b, own ? own : white);
+        break;
+      case EL_TICKER: {
+        // Scrolls in [x, x+a): alerts, plus leave-by (b bit 0) and weather (bit 1).
+        bool leave = (l.b & 1) && leave_part[0], wx = (l.b & 2) && s.wx_show && wx_part[0];
+        if (!leave && !wx && !alert_part[0]) break;
+        clipL = max(0, (int)l.x);
+        clipR = min(PANEL_RES_X, (int)l.x + max(6, (int)l.a));
+        if (tick_x[i] == INT16_MIN) tick_x[i] = clipR;
+        int cx = tick_x[i];
+        if (leave) cx = drawRunClip(leave_part, cx, l.y, own ? own : white);
+        if (wx)    cx = drawRunClip(wx_part, cx, l.y, own ? own : textColor(s, WX_TEXT_COLOR)) + 12;
+        cx = drawRunClip(alert_part, cx, l.y, own ? own : textColor(s, dma_display->color565(255, 220, 0)));
+        tick_x[i]--;
+        if (cx < clipL) tick_x[i] = clipR;
+        clipL = 0; clipR = PANEL_RES_X;
+        break;
+      }
+    }
   }
 }
 

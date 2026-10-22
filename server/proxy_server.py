@@ -109,6 +109,21 @@ DIRECTION_LABELS.update({
     "SI": ("St George", "Tottenville"),
 })
 
+# ── Custom layouts (web app → 07 Customize Layout) ─────────────────────────
+# Each element: [type, x, y, a, b, color]. Must match EL_* in the firmware and
+# EL in server/static/panel-editor.js. color 0 = the element's usual colour.
+EL = {"bullet": 1, "time": 2, "leave": 3, "ticker": 4, "weather": 5, "dot": 6, "clock": 7,
+      "countdown": 8, "label": 9, "bullet2": 10, "time2": 11, "countdown2": 12}
+LAYOUT_PRESETS = {
+    "standard":   [[EL["time"], 32, 0, 2, 1, 0], [EL["bullet"], 8, 24, 7, 0, 0],
+                   [EL["ticker"], 17, 20, 47, 3, 0]],
+    "minimalist": [[EL["dot"], 2, 1, 0, 0, 0], [EL["bullet"], 21, 16, 7, 0, 0],
+                   [EL["time"], 33, 12, 1, 0, 0]],
+    "two_rows":   [[EL["bullet"], 6, 8, 6, 0, 0], [EL["time"], 59, 1, 2, 2, 0],
+                   [EL["bullet2"], 6, 24, 6, 0, 0], [EL["time2"], 59, 17, 2, 2, 0]],
+}
+MAX_LAYOUT_ELEMENTS = 16
+
 DEFAULT_CONFIG = {
     "line":          "L",
     "stop_parent":   "L14",
@@ -129,6 +144,10 @@ DEFAULT_CONFIG = {
     "latch_blanking": 4,     # panel anti-ghosting (1-8); raise if faint lines appear
     "show_weather":  False,  # temperature + icon (+ umbrella if rain is likely)
     "animations":    False,  # train pulls across the panel when one is arriving
+    "custom_layout": False,  # draw the user's own layout instead of the built-in ones
+    "layout_single": LAYOUT_PRESETS["standard"],
+    "layout_two":    LAYOUT_PRESETS["two_rows"],   # used by Two Trains and Both Directions
+    "layout_label":  "HOME",
     "alt_routes":    False,  # suggest a faster route to alt_dest
     "alt_dest":      "",
     "alt_dest_name": "",
@@ -314,7 +333,26 @@ def _alt_origins(v):
     return out
 
 
+def _layout(v):
+    if not isinstance(v, list) or len(v) > MAX_LAYOUT_ELEMENTS:
+        raise ValueError(f"must be a list of up to {MAX_LAYOUT_ELEMENTS} elements")
+    ranges = [(1, 12), (-10, 74), (-10, 42), (0, 64), (0, 7), (0, 65535)]
+    out = []
+    for e in v:
+        if (not isinstance(e, list) or len(e) != 6
+                or any(isinstance(n, bool) or not isinstance(n, int) for n in e)):
+            raise ValueError("each element must be 6 whole numbers")
+        if any(not lo <= n <= hi for n, (lo, hi) in zip(e, ranges)):
+            raise ValueError("element value out of range")
+        out.append(list(e))
+    return out
+
+
 CONFIG_SCHEMA.update({
+    "custom_layout": _bool,
+    "layout_single": _layout,
+    "layout_two":    _layout,
+    "layout_label":  _text(15),
     "alt_routes":    _bool,
     "alt_dest":      _text(8, r"[A-Z0-9]{0,8}"),
     "alt_dest_name": _text(60),
@@ -1461,16 +1499,17 @@ def fmt_time(dt: datetime) -> str:
 
 
 def train_times(panel_id: str, line: str, stop_parent: str, platform: str,
-                walk: int, now: datetime) -> tuple[str, str, str | None]:
-    """(train time, leave-by time, error) for one line/station/platform."""
+                walk: int, now: datetime) -> tuple[str, str, str | None, int]:
+    """(train time, leave-by time, error, minutes until it leaves or -1)."""
     try:
         dt = next_departure(get_feed(line), stop_parent + platform, line, walk, now)
     except Exception:
         log.exception("Train feed error (panel %s, line %s)", panel_id, line)
-        return "--:--", "", "feed"
+        return "--:--", "", "feed", -1
     if not dt:
-        return "--:--", "", None
-    return fmt_time(dt), fmt_time(dt - timedelta(minutes=walk)), None
+        return "--:--", "", None, -1
+    mins = max(0, int((dt - now).total_seconds() // 60))
+    return fmt_time(dt), fmt_time(dt - timedelta(minutes=walk)), None, mins
 
 
 @app.get("/next-trains")
@@ -1491,26 +1530,39 @@ def next_trains():
         platform = "N"          # row 1 = N (uptown etc.), row 2 = S
 
     now = datetime.now(tz=EASTERN)
-    train_time, leave_by, error = train_times(panel_id, line, stop_parent, platform,
+    train_time, leave_by, error, mins = train_times(panel_id, line, stop_parent, platform,
                                               cfg["walk_minutes"], now)
 
     alert_text, level = alert_for_line(line, now.timestamp())
     r, g, b = hex_to_rgb(LINE_COLORS.get(line, "#888888"))
     fw = firmware_info() if cfg["auto_update"] else None
-    wx = get_weather(stop_parent) if cfg["show_weather"] else None
+    # A custom layout shows whatever elements it contains, whatever the
+    # Display Options toggles say, so fetch what its elements need.
+    layout = None
+    if cfg["custom_layout"]:
+        two_rows = (cfg["dual"] or cfg["both_dirs"]) and not cfg["demo"]
+        layout = cfg["layout_two"] if two_rows else cfg["layout_single"]
+    kinds = {e[0] for e in layout or []}
+    tickers = [e for e in layout or [] if e[0] == EL["ticker"]]
+    show_leave = cfg["show_leave_by"] if layout is None else (
+        EL["leave"] in kinds or any(e[4] & 1 for e in tickers))
+    show_alerts = cfg["show_alerts"] if layout is None else bool(tickers)
+    show_wx = cfg["show_weather"] if layout is None else (
+        EL["weather"] in kinds or any(e[4] & 2 for e in tickers))
+    wx = get_weather(stop_parent) if show_wx else None
 
     # Always 200: even when the MTA is down the panel still needs its
     # brightness / power / colour settings.
     payload = {
         "train_time":     train_time,
-        "leave_by":       leave_by if cfg["show_leave_by"] else "",
-        "alert_msg":      alert_text if cfg["show_alerts"] else "",
+        "leave_by":       leave_by if show_leave else "",
+        "alert_msg":      alert_text if show_alerts else "",
         "service_status": level,
         "line":           line,
         "logo_r": r, "logo_g": g, "logo_b": b,
         "logo_dark":      1 if line in DARK_TEXT_LINES else 0,
-        "show_leave_by":  cfg["show_leave_by"],
-        "show_alerts":    cfg["show_alerts"],
+        "show_leave_by":  show_leave,
+        "show_alerts":    show_alerts,
         "minimalist":     1 if cfg["minimalist"] else 0,
         "brightness":     cfg["brightness"],
         "latch_blanking": cfg["latch_blanking"],
@@ -1535,10 +1587,11 @@ def next_trains():
     if preview.get("until", 0) > time.time():
         payload["arriving"] = preview["id"]
     # Two rows: both directions of one line, or two trains (never in demo).
+    mins2 = -1
     payload["dual"] = 0
     payload["dirs"] = 0          # 1 = rows are N/S of the same line: firmware adds arrows
     if both_dirs:
-        time2, _, error2 = train_times(panel_id, line, stop_parent, "S", cfg["walk_minutes"], now)
+        time2, _, error2, mins2 = train_times(panel_id, line, stop_parent, "S", cfg["walk_minutes"], now)
         payload.update({
             "dual":            1,
             "dirs":            1,
@@ -1552,7 +1605,7 @@ def next_trains():
         payload["error"] = payload["error"] or error2
     elif cfg["dual"] and not cfg["demo"]:
         line2 = cfg["line2"]
-        time2, _, error2 = train_times(panel_id, line2, cfg["stop_parent2"], cfg["platform2"],
+        time2, _, error2, mins2 = train_times(panel_id, line2, cfg["stop_parent2"], cfg["platform2"],
                                        cfg["walk_minutes2"], now)
         r2, g2, b2 = hex_to_rgb(LINE_COLORS.get(line2, "#888888"))
         payload.update({
@@ -1566,6 +1619,10 @@ def next_trains():
         })
         payload["error"] = payload["error"] or error2
     payload.update(occasion_payload(panel_id, cfg, now))
+    if layout is not None:
+        payload.update({"layout": layout, "label": cfg["layout_label"],
+                        "clock_s": now.hour * 3600 + now.minute * 60 + now.second,
+                        "mins": mins, "mins2": mins2})
     payload.update(score_payload(cfg))
     payload.update(alt_payload(cfg, now) if not payload.get("scores_only") else {"alt": 0})
     if wifi_new:
@@ -1831,12 +1888,23 @@ def healthz():
     return jsonify({"ok": True, "firmware_build": fw["build"] if fw else None})
 
 
+def _asset_version() -> int:
+    """Changes whenever a file in server/static changes (cache-busting)."""
+    try:
+        folder = os.path.join(BASE_DIR, "static")
+        return int(max(os.path.getmtime(os.path.join(folder, f)) for f in os.listdir(folder)))
+    except (OSError, ValueError):
+        return 0
+
+
 @app.get("/")
 def index():
     resp = app.make_response(render_template(
         "index.html",
         line_colors=LINE_COLORS,
         direction_labels=DIRECTION_LABELS,
+        layout_presets=LAYOUT_PRESETS,
+        asset_v=_asset_version(),
     ))
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Cache-Control"] = "no-cache"

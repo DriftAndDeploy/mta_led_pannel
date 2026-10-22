@@ -964,6 +964,45 @@
   }
   .alt-add { margin-top: 8px; }
 
+  /* Layout editor (07) */
+  .layout-mini { display: block; width: 100%; aspect-ratio: 2 / 1; margin-top: 14px; border-radius: 10px;
+                 border: 1px solid var(--border); background: #08080a; cursor: pointer; }
+  .editor-open { margin-top: 12px; width: 100%; }
+  .editor {
+    display: none; position: fixed; inset: 0; z-index: 150; overflow-y: auto;
+    background: var(--bg); padding: max(18px, env(safe-area-inset-top)) 18px 40px;
+  }
+  .editor.open { display: block; }
+  .editor-inner { max-width: 560px; margin: 0 auto; }
+  .editor-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .editor-tabs { display: flex; margin-bottom: 12px; }
+  .editor canvas {
+    display: block; width: 100%; aspect-ratio: 2 / 1; border-radius: 10px; border: 1px solid var(--border);
+    background: #08080a; touch-action: none; cursor: grab;
+  }
+  .editor-hint { font-size: 10px; letter-spacing: 1px; color: var(--muted); margin: 8px 0 14px; text-align: center; }
+  .editor-block { margin-top: 16px; }
+  .editor-props { padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  .editor-props .title { font-family: 'Bebas Neue', sans-serif; font-size: 17px; letter-spacing: 2px; margin-bottom: 8px; }
+  .prop-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .prop-row > span { font-size: 10px; letter-spacing: 1px; color: var(--muted); min-width: 52px; }
+  .prop-btn {
+    padding: 6px 11px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg);
+    color: var(--muted); font-family: inherit; font-size: 11px; cursor: pointer;
+  }
+  .prop-btn.on { background: #8ecbff; border-color: #8ecbff; color: #0d0d0d; }
+  .prop-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  .prop-swatch.on { border-color: #8ecbff; box-shadow: 0 0 0 2px var(--bg) inset; }
+  .prop-swatch.default { background: conic-gradient(#fff 0 25%, #ffdc00 0 50%, #32a0ff 0 75%, #ff4040 0); }
+  .prop-row input[type=range] { flex: 1; accent-color: #8ecbff; }
+  .prop-row input[type=text] {
+    flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-family: inherit; font-size: 13px; padding: 7px 9px; text-transform: uppercase;
+  }
+  .editor-add { display: flex; flex-wrap: wrap; gap: 6px; }
+  .custom-note { display: none; margin-top: 12px; color: #8ecbff; }
+  .custom-note.show { display: block; }
+
   /* League sub-toggles under Live Scores */
   .league-chips { display: none; gap: 8px; margin-top: 10px; }
   .league-chips.show { display: flex; }
@@ -1281,6 +1320,9 @@
       <span class="toggle-track"><span class="toggle-thumb"></span></span>
     </label>
   </div>
+  <div class="custom-note toggle-hint" id="custom-note">
+    Your custom layout (07) is on: leave-by, alerts, weather and minimalist follow what you placed there.
+  </div>
   <div class="dual-note toggle-hint" id="dual-note" style="display:none; margin-top:12px">
     <span id="dual-note-mode">Two Trains</span> is on: the panel shows two times, so leave-by,
     alerts, weather and minimalist mode are paused. Service problems show as a dot next to the time.
@@ -1321,7 +1363,52 @@
   </div>
 </div>
 
+<!-- Custom layout -->
+<div class="section">
+  <div class="section-label">07 — Customize Layout</div>
+  <div class="toggle-row">
+    <div>
+      <span class="toggle-label">Use My Layout</span>
+      <div class="toggle-hint">Your own arrangement replaces the built-in screens · Two Trains &amp; Both Directions use your
+        "Two rows" layout · saves instantly</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggle-custom" onchange="saveCustomToggle(this.checked)">
+      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+    </label>
+  </div>
+  <canvas id="layout-mini" class="layout-mini" width="512" height="256" onclick="openEditor()"
+          aria-label="Preview of your layout"></canvas>
+  <button class="settings-link-btn editor-open" id="editor-open" onclick="openEditor()">OPEN LAYOUT EDITOR</button>
+</div>
+
 <button class="save-btn" id="save-btn" onclick="saveConfig()">SAVE TO PANEL</button>
+
+<!-- Layout editor (full screen) -->
+<div class="editor" id="editor">
+  <div class="editor-inner">
+    <div class="editor-head">
+      <div class="modal-title">LAYOUT EDITOR</div>
+      <button class="modal-close" onclick="closeEditor()" aria-label="Close">×</button>
+    </div>
+    <div class="platform-toggle editor-tabs">
+      <button class="platform-opt selected" id="etab-single" onclick="editorTab('single')">ONE TRAIN</button>
+      <button class="platform-opt" id="etab-two" onclick="editorTab('two')">TWO ROWS</button>
+    </div>
+    <canvas id="editor-canvas" width="640" height="320"></canvas>
+    <div class="editor-hint" id="editor-hint">Drag things around · tap one to change it</div>
+    <div class="editor-props" id="editor-props"></div>
+    <div class="editor-block">
+      <div class="alt-label">ADD</div>
+      <div class="editor-add" id="editor-add"></div>
+    </div>
+    <div class="editor-block">
+      <div class="alt-label">START FROM</div>
+      <div class="editor-add" id="editor-presets"></div>
+    </div>
+    <button class="save-btn" onclick="sendLayout()">SEND TO PANEL</button>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -1445,7 +1532,9 @@
   <button class="pair-btn" onclick="confirmPairing()">CONNECT TO PANEL</button>
 </div>
 
+<script src="/static/panel-editor.js?v={{ asset_v }}"></script>
 <script>
+const LAYOUT_PRESETS = {{ layout_presets | tojson }};
 const LINE_COLORS = {{ line_colors | tojson }};
 const DIRECTIONS  = {{ direction_labels | tojson }};
 const SWATCHES = [
@@ -1801,6 +1890,11 @@ async function init() {
              origins: (cfg.alt_origins || []).map(o => ({ ...o })) };
   document.getElementById('toggle-alt').checked        = altCfg.on;
   renderAlt();
+  if (Array.isArray(cfg.layout_single)) layouts.single = cfg.layout_single.map(e => [...e]);
+  if (Array.isArray(cfg.layout_two)) layouts.two = cfg.layout_two.map(e => [...e]);
+  layoutLabel = cfg.layout_label || 'HOME';
+  layoutDirty = false;
+  document.getElementById('toggle-custom').checked = !!cfg.custom_layout;
   document.getElementById('toggle-scores').checked     = !!cfg.show_scores;
   document.getElementById('scores-mlb').checked        = cfg.scores_mlb !== false;
   document.getElementById('scores-nba').checked        = cfg.scores_nba !== false;
@@ -1942,10 +2036,13 @@ function updateMinimalistUI() {
   const dim = (id, off) =>
     document.getElementById(id).closest('.toggle-row').style.opacity = off ? '0.35' : '1';
   const twoRows = dualOn || bothOn;
-  dim('toggle-leave-by', twoRows);
-  dim('toggle-alerts', twoRows);
-  dim('toggle-minimalist', twoRows);
-  dim('toggle-weather', twoRows);
+  const custom = document.getElementById('toggle-custom').checked;   // layout decides these
+  dim('toggle-leave-by', twoRows || custom);
+  dim('toggle-alerts', twoRows || custom);
+  dim('toggle-minimalist', twoRows || custom);
+  dim('toggle-weather', twoRows || custom);
+  document.getElementById('custom-note').classList.toggle('show', custom);
+  drawMiniPreview();
   document.getElementById('dual-note').style.display = twoRows ? 'block' : 'none';
   document.getElementById('dual-note-mode').textContent = bothOn ? 'Both Directions' : 'Two Trains';
   // Platform choice doesn't matter when both directions are shown.
@@ -2102,6 +2199,229 @@ async function refreshWeatherHint() {
   }
 }
 
+// ── Layout editor (07) ────────────────────────────────────────────────────
+// Layouts are lists of [type, x, y, a, b, color] (see static/panel-editor.js).
+// The simulator draws with the panel's own rules, so the preview is exact.
+let layouts = { single: LAYOUT_PRESETS.standard.map(e => [...e]), two: LAYOUT_PRESETS.two_rows.map(e => [...e]) };
+let layoutLabel = 'HOME';
+let editorMode = 'single';
+let editorSel = -1;
+let editorDrag = null;
+let editorRaf = null;
+let editorStart = 0;
+let layoutDirty = false;
+const EDIT_COLORS = ['#ffffff', '#ffdc00', '#32a0ff', '#ff4040', '#00c850', '#ff8c00'];
+
+function sampleData() {
+  const t1 = trainAt(0), t2 = bothOn ? t1 : trainAt(1);
+  const line = t1?.line || 'L', line2 = t2?.line || line;
+  const now = new Date(), h = now.getHours() % 12 || 12;
+  const time = document.getElementById('time-color').value || '#ffffff';
+  return {
+    line, line2, lineRgb: PanelSim.hexToRgb(LINE_COLORS[line] || '#888888'),
+    line2Rgb: PanelSim.hexToRgb(LINE_COLORS[line2] || '#888888'),
+    time: '8:42', time2: '8:51', leave: '8:32', mins: 7, mins2: 16,
+    alert: `${line} trains are running with delays`, wx: '\x0452\x11\x12\x10',
+    clock: `${h}:${String(now.getMinutes()).padStart(2, '0')}`, label: layoutLabel, status: 1,
+    timeRgb: PanelSim.hexToRgb(time), colorAll: document.getElementById('toggle-color-all').checked,
+  };
+}
+
+function currentLayout() { return layouts[editorMode]; }
+
+function drawMiniPreview() {
+  const mode = (dualOn || bothOn) ? 'two' : 'single';
+  const { frame } = PanelSim.render(layouts[mode], sampleData(), 0);
+  PanelSim.paint(document.getElementById('layout-mini'), frame);
+  document.getElementById('editor-open').textContent =
+    layoutDirty ? 'OPEN LAYOUT EDITOR · NOT SENT YET' : 'OPEN LAYOUT EDITOR';
+}
+
+function openEditor() {
+  editorMode = (dualOn || bothOn) ? 'two' : 'single';
+  editorSel = -1;
+  document.getElementById('editor').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  editorTab(editorMode);
+  editorStart = performance.now();
+  const loop = now => {
+    const frameNo = Math.floor((now - editorStart) / 40);           // 25 fps, like the panel
+    const { frame, boxes } = PanelSim.render(currentLayout(), sampleData(), frameNo);
+    editorBoxes = boxes;
+    PanelSim.paint(document.getElementById('editor-canvas'), frame, { box: boxes[editorSel] });
+    editorRaf = requestAnimationFrame(loop);
+  };
+  cancelAnimationFrame(editorRaf);
+  editorRaf = requestAnimationFrame(loop);
+}
+let editorBoxes = [];
+
+function closeEditor() {
+  cancelAnimationFrame(editorRaf);
+  document.getElementById('editor').classList.remove('open');
+  document.body.style.overflow = '';
+  drawMiniPreview();
+}
+
+function editorTab(mode) {
+  editorMode = mode;
+  editorSel = -1;
+  document.getElementById('etab-single').classList.toggle('selected', mode === 'single');
+  document.getElementById('etab-two').classList.toggle('selected', mode === 'two');
+  document.getElementById('editor-hint').textContent = mode === 'two'
+    ? 'Used when Two Trains or Both Directions is on · drag things around, tap one to change it'
+    : 'Drag things around · tap one to change it';
+  renderEditorSide();
+}
+
+function changed() { layoutDirty = true; renderEditorSide(); }
+
+function renderEditorSide() {
+  const lay = currentLayout();
+  const PS = PanelSim, info = PS.EL_INFO;
+  // Add: one of each element; train-2 ones only on the Two rows tab
+  const have = new Set(lay.map(e => e[0]));
+  document.getElementById('editor-add').innerHTML = Object.keys(info).map(Number)
+    .filter(t => !have.has(t) && (editorMode === 'two' || !info[t].two))
+    .map(t => `<button class="prop-btn" onclick="addElement(${t})">+ ${info[t].name}</button>`).join('')
+    || '<span class="toggle-hint">Everything is on the panel</span>';
+  const presets = editorMode === 'two' ? [['two_rows', 'Two rows']] : [['standard', 'Standard'], ['minimalist', 'Minimalist']];
+  document.getElementById('editor-presets').innerHTML = presets
+    .map(([k, n]) => `<button class="prop-btn" onclick="applyPreset('${k}')">${n}</button>`).join('');
+
+  const box = document.getElementById('editor-props');
+  const e = lay[editorSel];
+  if (!e) { box.innerHTML = '<div class="toggle-hint">Tap something on the panel to change its size, alignment or color.</div>'; return; }
+  const t = e[0], kind = info[t].kind;
+  const btn = (label, on, fn) => `<button class="prop-btn${on ? ' on' : ''}" onclick="${fn}">${label}</button>`;
+  let html = `<div class="title">${info[t].name}</div>`;
+  if (kind === 'bullet') {
+    html += `<div class="prop-row"><span>SIZE</span>${[[5, 'S'], [6, 'M'], [7, 'L']].map(([r, n]) => btn(n, e[3] === r, `setProp(3,${r})`)).join('')}</div>`;
+  }
+  if (PS.SIZED.has(t)) {
+    html += `<div class="prop-row"><span>SIZE</span>${btn('Small', e[3] !== 2, 'setProp(3,1)')}${btn('Big', e[3] === 2, 'setProp(3,2)')}</div>`;
+  }
+  if (kind === 'text') {
+    html += `<div class="prop-row"><span>ALIGN</span>${[[0, 'Left'], [1, 'Center'], [2, 'Right']].map(([a, n]) => btn(n, e[4] === a, `setProp(4,${a})`)).join('')}</div>`;
+  }
+  if (t === PS.EL.leave) {
+    html += `<div class="prop-row"><span>SHOW</span>${btn('Leave 8:32', e[3] !== 1, 'setProp(3,0)')}${btn('8:32', e[3] === 1, 'setProp(3,1)')}</div>`;
+  }
+  if (t === PS.EL.label) {
+    html += `<div class="prop-row"><span>TEXT</span><input type="text" maxlength="15" value="${escapeHtml(layoutLabel)}"
+               oninput="layoutLabel = this.value.toUpperCase(); layoutDirty = true"></div>`;
+  }
+  if (kind === 'ticker') {
+    html += `<div class="prop-row"><span>WIDTH</span><input type="range" min="12" max="64" value="${e[3]}"
+               oninput="setProp(3, +this.value, true)"></div>
+             <div class="prop-row"><span>ALSO</span>${btn('Leave by', e[4] & 1, 'toggleBit(1)')}${btn('Weather', e[4] & 2, 'toggleBit(2)')}</div>`;
+  }
+  if (t !== PS.EL.dot && kind !== 'bullet') {
+    html += `<div class="prop-row"><span>COLOR</span>
+      <button class="prop-swatch default${e[5] === 0 ? ' on' : ''}" title="Usual color" onclick="setProp(5,0)"></button>
+      ${EDIT_COLORS.map(h => { const v = PS.to565(h); return `<button class="prop-swatch${e[5] === v ? ' on' : ''}" style="background:${h}" onclick="setProp(5,${v})"></button>`; }).join('')}</div>`;
+  }
+  html += `<div class="prop-row"><span>MOVE</span>${btn('←', 0, 'nudge(-1,0)')}${btn('↑', 0, 'nudge(0,-1)')}${btn('↓', 0, 'nudge(0,1)')}${btn('→', 0, 'nudge(1,0)')}
+           <button class="prop-btn" style="margin-left:auto;color:#ff6a5a" onclick="removeElement()">Remove</button></div>`;
+  box.innerHTML = html;
+}
+
+function setProp(i, v, quiet) {
+  const e = currentLayout()[editorSel];
+  if (!e) return;
+  const kind = PanelSim.EL_INFO[e[0]].kind;
+  const before = boxOf(editorSel);
+  e[i] = v;
+  if (i === 4 && kind === 'text' && before) {         // re-anchor so the text doesn't jump
+    const [left, , w] = before;
+    e[1] = v === 0 ? left : v === 1 ? left + Math.trunc(w / 2) : left + w - 1;
+  }
+  if (i === 3) keepInside();                           // bigger text/bullet stays on the panel
+  layoutDirty = true;
+  if (!quiet) renderEditorSide();
+}
+
+function boxOf(i) { return PanelSim.render(currentLayout(), sampleData(), 0).boxes[i]; }
+
+function keepInside() {
+  const e = currentLayout()[editorSel], b = boxOf(editorSel);
+  if (!e || !b) return;
+  if (b[0] < 0) e[1] -= b[0];
+  if (b[0] + b[2] > 64) e[1] -= b[0] + b[2] - 64;
+  if (b[1] < 0) e[2] -= b[1];
+  if (b[1] + b[3] > 32) e[2] -= b[1] + b[3] - 32;
+}
+function toggleBit(bit) { const e = currentLayout()[editorSel]; if (e) { e[4] ^= bit; changed(); } }
+function clampEl(e) {
+  e[1] = Math.max(-8, Math.min(72, e[1]));
+  e[2] = Math.max(-8, Math.min(40, e[2]));
+}
+function nudge(dx, dy) { const e = currentLayout()[editorSel]; if (e) { e[1] += dx; e[2] += dy; clampEl(e); layoutDirty = true; } }
+function removeElement() { currentLayout().splice(editorSel, 1); editorSel = -1; changed(); }
+function addElement(t) {
+  currentLayout().push([...PanelSim.EL_INFO[t].def]);
+  editorSel = currentLayout().length - 1;
+  changed();
+}
+function applyPreset(k) {
+  layouts[editorMode] = LAYOUT_PRESETS[k].map(e => [...e]);
+  editorSel = -1;
+  changed();
+}
+
+// Dragging: pointer position -> LED pixel, topmost element under it wins
+function ledAt(ev) {
+  const r = ev.target.getBoundingClientRect();
+  return [(ev.clientX - r.left) / r.width * 64, (ev.clientY - r.top) / r.height * 32];
+}
+function initEditorCanvas() {
+  const cv = document.getElementById('editor-canvas');
+  cv.addEventListener('pointerdown', ev => {
+    const [px, py] = ledAt(ev);
+    const lay = currentLayout();
+    editorSel = -1;
+    for (let i = lay.length - 1; i >= 0; i--) {
+      const b = editorBoxes[i];
+      if (b && px >= b[0] - 1 && px <= b[0] + b[2] + 1 && py >= b[1] - 1 && py <= b[1] + b[3] + 1) { editorSel = i; break; }
+    }
+    if (editorSel >= 0) {
+      const e = lay[editorSel];
+      editorDrag = { px, py, x: e[1], y: e[2] };
+      cv.setPointerCapture(ev.pointerId);
+      cv.style.cursor = 'grabbing';
+    }
+    renderEditorSide();
+  });
+  cv.addEventListener('pointermove', ev => {
+    if (!editorDrag) return;
+    const [px, py] = ledAt(ev);
+    const e = currentLayout()[editorSel];
+    const nx = editorDrag.x + Math.round(px - editorDrag.px), ny = editorDrag.y + Math.round(py - editorDrag.py);
+    if (nx !== e[1] || ny !== e[2]) { e[1] = nx; e[2] = ny; clampEl(e); layoutDirty = true; }
+  });
+  const end = () => { editorDrag = null; cv.style.cursor = 'grab'; };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+}
+
+async function sendLayout() {
+  const ok = await patchConfig({ custom_layout: true, layout_single: layouts.single, layout_two: layouts.two,
+                                 layout_label: layoutLabel || ' ' }, '✓ Sent — the panel switches within 15 s');
+  if (ok) {
+    layoutDirty = false;
+    document.getElementById('toggle-custom').checked = true;
+    updateMinimalistUI();
+    closeEditor();
+  }
+}
+
+async function saveCustomToggle(on) {
+  if (!await patchConfig({ custom_layout: on }, on ? 'Your layout is on — the panel switches within 15 s' : 'Built-in layouts are back')) {
+    document.getElementById('toggle-custom').checked = !on;
+  }
+  updateMinimalistUI();
+}
+
 // ── Faster route ──────────────────────────────────────────────────────────
 // Destination + up to 2 more starting stations (the panel's own station from
 // section 02, with the walk time from 05, is always the first).
@@ -2247,6 +2567,7 @@ function updateScoresUI() {
   const rows = ['toggle-dual', 'toggle-both', 'toggle-leave-by', 'toggle-alerts', 'toggle-weather',
                 'toggle-animations', 'toggle-minimalist', 'toggle-alt'];
   document.getElementById('alt-config').classList.toggle('locked', on);
+  document.getElementById('layout-mini').closest('.section').classList.toggle('locked', on);
   rows.forEach(id => document.getElementById(id).closest('.toggle-row').classList.toggle('locked', on));
   document.getElementById('dual-note').classList.toggle('locked', on);
   ['line-grid', 'station-list', 'platform-N', 'walk-val'].forEach(id =>
@@ -2665,6 +2986,7 @@ document.addEventListener('visibilitychange', () => {
 
 buildSwatches();
 drawEggTurtle();
+initEditorCanvas();
 (() => {
   let collapsed = true;
   try { collapsed = localStorage.getItem('optionsCollapsed') !== '0'; } catch (e) {}
