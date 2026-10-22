@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.6.0"
-#define FW_BUILD   760
+#define FW_VERSION "7.7.0"
+#define FW_BUILD   770
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -890,47 +890,34 @@ void drawNormal(const PanelState& s) {
 }
 
 // Minimalist layout: [logo][5px][time] centred as one unit + status dot.
-// With leave-by / weather / alerts on, everything stays inside the bullet's
-// height in the middle of the panel: the time moves up to the bullet's top
-// half and the text runs in its bottom half, scrolling in a window that
-// starts just right of the bullet (weather alone fits, so it sits still).
-//      (L)  8:42
-//      (L)  Leave by 8:32  > L delays ...
+// With weather on, that row moves up 3 px and the weather sits centred below.
 void drawMinimalist(const PanelState& s) {
   const int GAP = 5;
-  bool weather = s.wx_show && wx_part[0];
-  bool scroll  = leave_part[0] || alert_part[0];   // leave-by / alerts, if turned on
-  uint16_t timeColor = dma_display->color565(s.time_r, s.time_g, s.time_b);
+  bool weather   = s.wx_show && wx_part[0];
+  bool ticker    = leave_part[0] || alert_part[0];   // leave-by / alerts, if turned on
+  int cy         = (weather || ticker) ? 13 : 16;   // logo centre row
+  int timeWidth  = strlen(s.train_time) * 6;
+  int totalWidth = 14 + GAP + timeWidth;
+  int startX     = (PANEL_RES_X - totalWidth) / 2;
+
+  drawLogoAt(startX + 7, cy, s);
+
   dma_display->setTextSize(1);
-
-  if (!scroll && !weather) {                       // just bullet + time, centred
-    int timeWidth = strlen(s.train_time) * 6;
-    int startX = (PANEL_RES_X - (14 + GAP + timeWidth)) / 2;
-    drawLogoAt(startX + 7, 16, s);
-    dma_display->setTextColor(timeColor);
-    dma_display->setCursor(startX + 14 + GAP, 12);
-    dma_display->print(s.train_time);
-    drawStatusDot(s.service_status);
-    return;
-  }
-
-  const int LOGO_CX = 10, TEXT_X = 20;             // bullet x 3..17, text window x 20..63
-  const int TIME_Y = 9, LINE_Y = 17;               // bullet rows 9..23: top half / bottom half
-  if (scroll) {
-    int cx = scroll_x;
-    cx = drawRun(leave_part, cx, LINE_Y, textColor(s, dma_display->color565(255, 255, 255)));
-    if (weather) cx = drawRun(wx_part, cx, LINE_Y, textColor(s, WX_TEXT_COLOR)) + 12;
-    cx = drawRun(alert_part, cx, LINE_Y, textColor(s, dma_display->color565(255, 220, 0)));
-    dma_display->fillRect(0, LINE_Y - 1, TEXT_X - 1, 9, 0);   // clip: text slides under the bullet's edge
-    scroll_x--;
-    if (cx < TEXT_X) scroll_x = PANEL_RES_X;
-  } else {
-    drawRun(wx_part, TEXT_X, LINE_Y, textColor(s, WX_TEXT_COLOR));
-  }
-  drawLogoAt(LOGO_CX, 16, s);
-  dma_display->setTextColor(timeColor);
-  dma_display->setCursor(TEXT_X, TIME_Y);
+  dma_display->setTextColor(dma_display->color565(s.time_r, s.time_g, s.time_b));
+  dma_display->setCursor(startX + 14 + GAP, cy - 4);
   dma_display->print(s.train_time);
+
+  if (ticker) {           // scrolls along the bottom: leave by, weather, alert
+    int cx = scroll_x;
+    cx = drawRun(leave_part, cx, 24, textColor(s, dma_display->color565(255, 255, 255)));
+    if (weather) cx = drawRun(wx_part, cx, 24, textColor(s, WX_TEXT_COLOR)) + 12;
+    cx = drawRun(alert_part, cx, 24, textColor(s, dma_display->color565(255, 220, 0)));
+    scroll_x--;
+    if (cx < 0) scroll_x = PANEL_RES_X;
+  } else if (weather) {
+    drawRun(wx_part, (PANEL_RES_X - runWidth(wx_part)) / 2, 24, textColor(s, WX_TEXT_COLOR));
+  }
+
   drawStatusDot(s.service_status);
 }
 

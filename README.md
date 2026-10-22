@@ -143,9 +143,8 @@ protects against crashes, not against firmware that runs but misbehaves.
   along the bottom in this order: "Leave by" (white), weather, service alert
   (yellow) — each only if it's turned on (and, for alerts, if there is one).
 - **Minimalist:** bullet + time centred, with a 2×2 status dot in the top-left
-  corner (green normal, yellow alerts/changes, red suspended). With leave-by,
-  weather or alerts on, everything stays within the bullet's height: the time
-  in its top half, the text scrolling in its bottom half beside it.
+  corner (green normal, yellow alerts/changes, red suspended). Leave-by, weather
+  and alerts scroll along the bottom if they're turned on.
 - **Weather** (optional, **Display Options → Show Weather**): icon + temperature
   (°F) for the selected station, plus an **umbrella** icon when there's at least
   a 50% chance of rain in the next 12 hours (or it's raining now). Normal mode
