@@ -10,8 +10,8 @@
  *   text:    x = anchor (b bits 0-1: 0 left, 1 centre, 2 right), y = top,
  *            a = font size 0-4 (weather 1-3)
  *   leave:   b bit 2 = time only ("8:32")
- *   ticker:  scrolls in [x, x+a); b bit 0 = also leave-by, bit 1 = also
- *            weather, bits 2-3 = font size - 1
+ *   ticker:  scrolls in [x, x+a): Arrive By message + alerts; b bit 1 = also
+ *            weather, bits 2-3 = font size 0-3
  * Font sizes: 0 = 3x5, 1 = 5x7, 2-4 = 5x7 scaled up with 1 px letter spacing
  * and a slim colon (size 2 = the big train time).
  */
@@ -24,7 +24,7 @@ const EL_INFO = {
   1:  { name: 'Line bullet',        kind: 'bullet', def: [1, 8, 24, 7, 0, 0] },
   2:  { name: 'Train time',         kind: 'text',   def: [2, 32, 0, 2, 1, 0] },
   3:  { name: 'Leave by',           kind: 'text',   def: [3, 2, 24, 1, 0, 0] },
-  4:  { name: 'Scrolling alerts',   kind: 'ticker', def: [4, 17, 20, 47, 1, 0] },
+  4:  { name: 'Scrolling text',     kind: 'ticker', def: [4, 17, 20, 47, 4, 0] },
   5:  { name: 'Weather',            kind: 'text',   def: [5, 63, 24, 1, 2, 0] },
   6:  { name: 'Status dot',         kind: 'dot',    def: [6, 2, 1, 0, 0, 0] },
   7:  { name: 'Clock',              kind: 'text',   def: [7, 63, 0, 1, 2, 0] },
@@ -33,13 +33,13 @@ const EL_INFO = {
   11: { name: 'Time (train 2)',     kind: 'text',   def: [11, 59, 17, 2, 2, 0], two: true },
 };
 // Font size range per element type (ticker keeps its size in b, the rest in a)
-const SIZES = { 2: [0, 4], 3: [0, 4], 7: [0, 4], 9: [0, 4], 11: [0, 4], 5: [1, 3], 4: [1, 3] };
+const SIZES = { 2: [0, 4], 3: [0, 4], 7: [0, 4], 9: [0, 4], 11: [0, 4], 5: [1, 3], 4: [0, 3] };
 const SIZE_NAMES = ['Tiny', 'Small', 'Big', 'Bigger', 'Huge'];
-function getSize(e) { return e[0] === 4 ? ((e[4] >> 2) & 3) + 1 : e[3]; }
+function getSize(e) { return e[0] === 4 ? (e[4] >> 2) & 3 : e[3]; }
 function setSize(e, v) {
   const [lo, hi] = SIZES[e[0]];
   v = Math.max(lo, Math.min(hi, v));
-  if (e[0] === 4) e[4] = (e[4] & 3) | ((v - 1) << 2); else e[3] = v;
+  if (e[0] === 4) e[4] = (e[4] & 3) | (v << 2); else e[3] = v;
   return v;
 }
 
@@ -148,16 +148,20 @@ function wxIcon(f, x, y, icon, s) {
   else if (icon === 7) { f.bits7(x, y, BMP.topcloud, grey, s); f.bits7(x, y + 4 * s, BMP.bolt, yellow, s); }
   else f.bits7(x, y, BMP.cloud, grey, s);
 }
-const runAdv = (ch, s) => { const c = ch.charCodeAt(0); return c >= 1 && c <= 0x10 ? 7 * s + 1 : c === 0x11 ? 3 * s + 1 : c === 0x12 ? 3 * s : charAdv(ch, s); };
+const runAdv = (ch, s) => {                      // icons never go below 1x
+  const c = ch.charCodeAt(0), k = Math.max(1, s);
+  return c >= 1 && c <= 0x10 ? 7 * k + 1 : c === 0x11 ? 3 * k + 1 : c === 0x12 ? 3 * k : charAdv(ch, s);
+};
 const runW = (t, s) => [...t].reduce((w, ch) => w + runAdv(ch, s), 0);
 function drawRun(f, t, x, y, s, c) {
+  const k = Math.max(1, s);
   for (const ch of t) {
     const code = ch.charCodeAt(0), a = runAdv(ch, s);
-    if (code >= 1 && code <= 7) wxIcon(f, x, y, code, s);
-    else if (code === 0x10) { f.bits7(x, y, BMP.canopy, [80, 170, 255], s); f.bits7(x, y + 3 * s, BMP.handle, [180, 180, 180], s); }
+    if (code >= 1 && code <= 7) wxIcon(f, x, y, code, k);
+    else if (code === 0x10) { f.bits7(x, y, BMP.canopy, [80, 170, 255], k); f.bits7(x, y + 3 * k, BMP.handle, [180, 180, 180], k); }
     else if (code === 0x11) {
-      for (let i = 0; i < 3; i++) { f.rect(x + i * s, y, s, s, c); f.rect(x + i * s, y + 2 * s, s, s, c); }
-      f.rect(x, y + s, s, s, c); f.rect(x + 2 * s, y + s, s, s, c);
+      for (let i = 0; i < 3; i++) { f.rect(x + i * k, y, k, k, c); f.rect(x + i * k, y + 2 * k, k, k, c); }
+      f.rect(x, y + k, k, k, c); f.rect(x + 2 * k, y + k, k, k, c);
     }
     else if (code !== 0x12) f.char(ch, x, y, s, c);
     x += a;
@@ -198,11 +202,11 @@ function render(layout, data, frameNo) {
       case EL.clock: box = textAt(f, data.clock, x, y, size, align, own(e, [200, 200, 200])); break;
       case EL.label: box = textAt(f, data.label || ' ', x, y, size, align, own(e, white)); break;
       case EL.ticker: {
-        const ts = Math.max(1, Math.min(3, ((b >> 2) & 3) + 1));
+        const ts = (b >> 2) & 3;
         const L = Math.max(0, x), R = Math.min(64, x + Math.max(6, a));
         const parts = [];
-        if (b & 1) parts.push(['Leave by ' + data.leave + '  ', own(e, white), 0]);
-        if (b & 2) parts.push([data.wx, own(e, data.colorAll ? data.timeRgb : [150, 200, 255]), 12 * ts]);
+        if (data.deadline) parts.push([data.deadline + '  ', own(e, data.colorAll ? data.timeRgb : [120, 230, 150]), 0]);
+        if (b & 2) parts.push([data.wx, own(e, data.colorAll ? data.timeRgb : [150, 200, 255]), 12 * Math.max(1, ts)]);
         parts.push(['> ' + data.alert + '  ', own(e, data.colorAll ? data.timeRgb : [255, 220, 0]), 0]);
         const total = parts.reduce((w, p) => w + runW(p[0], ts) + p[2], 0);
         const period = (R - L) + total + 2;               // same cycle as the firmware
@@ -210,7 +214,7 @@ function render(layout, data, frameNo) {
         f.clipL = L; f.clipR = R;
         parts.forEach(([t, c, gap]) => { cx = drawRun(f, t, cx, y, ts, c) + gap; });
         f.clipL = 0; f.clipR = 64;
-        box = [L, y, R - L, 7 * ts];
+        box = [L, y, R - L, ts ? 7 * ts : 5];
         break;
       }
     }

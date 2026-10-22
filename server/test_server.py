@@ -20,6 +20,13 @@ import proxy_server as ps  # noqa: E402
 
 ET = ps.EASTERN
 
+# The shipped defaults have no station (every panel picks its own). Most
+# tests need one, so they use a sample station as the default.
+SHIPPED_DEFAULTS = dict(ps.DEFAULT_CONFIG)
+SAMPLE_STATION = {"line": "L", "stop_parent": "L14", "stop_name": "Sample St",
+                  "line2": "L", "stop_parent2": "L14", "stop_name2": "Sample St"}
+ps.DEFAULT_CONFIG.update(SAMPLE_STATION)
+
 
 def at(h, m):
     return datetime(2026, 10, 11, h, m, tzinfo=ET)
@@ -729,7 +736,7 @@ def trip_of(route, stops):
     return {"route": route, "stops": [(sid[:-1], sid[-1], t, t) for sid, t in stops]}
 
 
-class AltRoutes(unittest.TestCase):
+class RoutePlanning(unittest.TestCase):
     def test_direct_ride_from_another_station_wins(self):
         trips = [trip_of("L", [("X01N", at(10, 20)), ("X09N", at(10, 50))]),     # usual, delayed
                  trip_of("J", [("X02S", at(10, 15)), ("X09S", at(10, 35))])]
@@ -750,7 +757,7 @@ class AltRoutes(unittest.TestCase):
         self.assertEqual(len(opts), 1)
         o = opts[0]
         self.assertEqual((o["line"], o["via"], o["line2"], o["arrive"]), ("L", "635", "6", at(10, 35)))
-        self.assertIn("L to 14 St-Union Sq, then 6", ps.describe_route(o))       # same complex name
+        self.assertEqual(ps.describe_route(o), "L at 10:10 to 14 St-Union Sq, then 6. Arrive 10:35")   # same complex name
         o2 = dict(o, alight="D21", via="637")
         self.assertIn("to Broadway-Lafayette St, walk to Bleecker St, then 6", ps.describe_route(o2))
 
@@ -760,35 +767,69 @@ class AltRoutes(unittest.TestCase):
         self.assertEqual(len(opts), 1)
         self.assertGreater(opts[0]["arrive"], at(10, 15))                             # includes the walk
 
-    def _payload(self, trips, cfg):
-        ps._alt_cache.clear()
-        with mock.patch.object(ps, "live_trips", return_value=trips):
-            return ps.alt_payload(cfg, at(10, 0))
-
-    def test_switches_only_when_it_saves_five_minutes(self):
-        cfg = {**ps.DEFAULT_CONFIG, "alt_routes": True, "alt_dest": "X09", "stop_parent": "X01",
-               "line": "L", "platform": "N", "walk_minutes": 5,
-               "alt_origins": [{"stop": "X02", "name": "Other St", "walk": 8}]}
-        usual = trip_of("L", [("X01N", at(10, 20)), ("X09N", at(10, 50))])
-        faster = self._payload([usual, trip_of("J", [("X02S", at(10, 15)), ("X09S", at(10, 44))])], cfg)
-        slightly = self._payload([usual, trip_of("J", [("X02S", at(10, 15)), ("X09S", at(10, 47))])], cfg)
-        off = self._payload([usual], {**cfg, "alt_routes": False})
-        self.assertEqual((faster["alt"], faster["alt_line"], faster["alt_time"]), (1, "J", "10:15"))
-        self.assertEqual(faster["alt_text"], "ALT: Other St, leave 10:07. J. Arr 10:44 (6 min sooner)")
-        self.assertEqual(slightly["alt"], 0)                                          # 3 min: not worth it
-        self.assertEqual(off, {"alt": 0})
-
-    def test_config_validation(self):
-        c = ps.app.test_client()
-        too_many = [{"stop": f"X0{i}", "name": "x", "walk": 3} for i in range(3)]
-        self.assertEqual(c.post("/api/config?panel_id=AR0001", json={"alt_origins": too_many}).status_code, 400)
-        r = c.post("/api/config?panel_id=AR0001", json={"alt_routes": True, "alt_dest": "L03",
-                    "alt_origins": [{"stop": "g29", "name": "Metropolitan Av", "walk": 99}]})
-        self.assertEqual(r.status_code, 400)                                         # lower-case id rejected
-        r = c.post("/api/config?panel_id=AR0001", json={"alt_origins": [{"stop": "G29", "walk": 99}]})
-        self.assertEqual(r.get_json()["config"]["alt_origins"], [{"stop": "G29", "name": "G29", "walk": 60}])
+    def test_base_line(self):
         self.assertEqual(ps.base_line("6X"), "6")
         self.assertEqual(ps.base_line("SI"), "SI")
+
+
+class ArriveBy(unittest.TestCase):
+    CFG = {**ps.DEFAULT_CONFIG, "arrive_by": True, "arrive_dest": "X09", "arrive_dest_name": "Work St (J)",
+           "arrive_time": "11:00", "stop_parent": "X01", "walk_minutes": 5}
+
+    def msg(self, trips, now, **cfg):
+        ps._arrive_cache.clear()
+        with mock.patch.object(ps, "live_trips", return_value=trips):
+            return ps.arrive_msg({**self.CFG, **cfg}, now)
+
+    def test_latest_train_that_still_makes_it(self):
+        trips = [trip_of("J", [("X01S", at(10, 20)), ("X09S", at(10, 45))]),
+                 trip_of("J", [("X01S", at(10, 30)), ("X09S", at(10, 55))]),     # latest that works
+                 trip_of("J", [("X01S", at(10, 40)), ("X09S", at(11, 5))])]      # too late
+        self.assertEqual(self.msg(trips, at(10, 0)), "Leave no later than 10:25 to reach Work St by 11:00")
+
+    def test_estimate_until_live_data_reaches_the_deadline(self):
+        trips = [trip_of("J", [("X01S", at(9, 20)), ("X09S", at(9, 45))])]       # 25 min ride
+        # 11:00 - 25 min ride - 5 walk - 8 waiting = 10:22
+        self.assertEqual(self.msg(trips, at(9, 0)), "Leave no later than ~10:22 to reach Work St by 11:00")
+
+    def test_late_and_outside_the_window(self):
+        trips = [trip_of("J", [("X01S", at(10, 50)), ("X09S", at(11, 12))])]
+        self.assertEqual(self.msg(trips, at(10, 40)), "Leave now: you'd reach Work St at 11:12 (12 min late)")
+        self.assertEqual(self.msg(trips, at(7, 30)), "")                          # > 3 h before
+        self.assertEqual(self.msg(trips, at(10, 0), arrive_by=False), "")
+        self.assertEqual(self.msg([], at(10, 0)), "")                             # no route: say nothing
+
+    def test_payload_and_config(self):
+        c = ps.app.test_client()
+        r = c.post("/api/config?panel_id=AB0001", json={"arrive_time": "25:00"})
+        self.assertEqual(r.status_code, 400)
+        r = c.post("/api/config?panel_id=AB0001", json={"arrive_by": True, "arrive_dest": "X09", "arrive_time": "11:00"})
+        self.assertEqual(r.status_code, 200)
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", return_value=("", 0)), \
+             mock.patch.object(ps, "arrive_msg", return_value="Leave no later than 10:25"):
+            j = c.get("/next-trains?panel_id=AB0001").get_json()
+        self.assertEqual(j["dl_msg"], "Leave no later than 10:25")
+        self.assertNotIn("alt", j)
+
+    def test_old_faster_route_destination_is_kept(self):
+        raw = ps.migrate_config({"alt_routes": True, "alt_dest": "L03", "alt_dest_name": "Union Sq", "alt_origins": []})
+        self.assertEqual((raw["arrive_dest"], raw["arrive_dest_name"]), ("L03", "Union Sq"))
+        self.assertFalse(any(k.startswith("alt_") for k in raw))
+
+
+class LocationAgnostic(unittest.TestCase):
+    def test_no_station_until_one_is_picked(self):
+        for k in ("line", "stop_parent", "stop_name", "line2", "stop_parent2", "stop_name2"):
+            self.assertEqual(SHIPPED_DEFAULTS[k], "", k)
+
+    def test_unconfigured_panel_asks_to_pick_a_station(self):
+        c = ps.app.test_client()
+        c.post("/api/config?panel_id=NEW001", json={"line": "", "stop_parent": "", "stop_name": ""})
+        with mock.patch.object(ps, "load_config", return_value=dict(SHIPPED_DEFAULTS)), \
+             mock.patch.object(ps, "get_feed", side_effect=AssertionError("no feed for an unset panel")):
+            j = c.get("/next-trains?panel_id=NEW001").get_json()
+        self.assertEqual((j["train_time"], j["alert_msg"], j["show_alerts"]), ("--:--", ps.SETUP_MSG, True))
 
 
 class CustomLayout(unittest.TestCase):
@@ -843,11 +884,14 @@ class CustomLayout(unittest.TestCase):
         cfg = ps.load_config(pid)
         self.assertTrue(cfg["custom_layout"])
         self.assertNotIn("minimalist", cfg)
-        self.assertEqual(cfg["layout_single"][-1], [ps.EL["ticker"], 0, 24, 64, 1, 0])
+        self.assertEqual(cfg["layout_single"][-1], [ps.EL["leave"], 32, 24, 1, 1, 0])   # leave-by on its own
         self.assertEqual(ps._layout(cfg["layout_single"]), cfg["layout_single"])
         with open(ps.config_path(pid), "w") as f:
             json.dump({"minimalist": True, "show_leave_by": False, "show_alerts": False}, f)
         self.assertEqual(ps.load_config(pid)["layout_single"], ps.LAYOUT_PRESETS["minimalist"])
+        # v2 tickers: leave-by dropped from the ticker, font size re-coded (b bits 2-3 = size)
+        raw = ps.migrate_config({"layout_v": 2, "layout_single": [[4, 17, 20, 47, 3, 0], [4, 0, 0, 64, 1 | 8, 0]]})
+        self.assertEqual(raw["layout_single"], [[4, 17, 20, 47, 2 | 4, 0], [4, 0, 0, 64, 12, 0]])
 
     def test_presets_are_valid(self):
         for name, lay in ps.LAYOUT_PRESETS.items():

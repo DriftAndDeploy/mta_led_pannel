@@ -934,7 +934,7 @@
   .scores-note.show { display: block; }
   .scores-note + .toggle-row { margin-top: 12px; }
 
-  /* Faster route setup */
+  /* Arrive By setup */
   .alt-config { display: none; margin-top: 12px; }
   .alt-config.show { display: block; }
   .alt-config + .toggle-row { margin-top: 14px; }
@@ -954,15 +954,14 @@
     width: 16px; height: 16px; border-radius: 50%; font-family: 'Bebas Neue', sans-serif;
     font-size: 11px; display: flex; align-items: center; justify-content: center; color: #fff;
   }
-  .alt-origin { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-  .alt-origin .alt-chip { flex: 1; min-width: 0; padding: 8px 10px; }
-  .alt-origin .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .alt-walk { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
-  .alt-walk button {
-    width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
-    background: var(--surface); color: var(--text); font-size: 15px; cursor: pointer; line-height: 1;
+  .alt-from { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 10px; }
+  .alt-from b { color: var(--text); font-weight: 400; }
+  .arrive-time {
+    width: 100%; box-sizing: border-box; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; color: var(--text); font-family: inherit; font-size: 15px; padding: 9px 12px;
+    color-scheme: dark; -webkit-appearance: none; appearance: none; min-height: 42px;
   }
-  .alt-add { margin-top: 8px; }
+  .arrive-time::-webkit-date-and-time-value { text-align: left; margin: 0; }
 
   /* Layout editor (07) */
   .layout-mini { display: block; width: 100%; aspect-ratio: 2 / 1; margin-top: 14px; border-radius: 10px;
@@ -1249,8 +1248,8 @@
   </div>
   <div class="toggle-row">
     <div>
-      <span class="toggle-label">Faster Route</span>
-      <div class="toggle-hint" id="alt-hint">Suggests another train or station when it gets you to your destination 5+ min sooner · saves instantly</div>
+      <span class="toggle-label">Arrive By</span>
+      <div class="toggle-hint" id="alt-hint">Pick where you're going and when you need to be there · the panel scrolls "Leave no later than …" · saves instantly</div>
     </div>
     <label class="toggle-switch">
       <input type="checkbox" id="toggle-alt" onchange="saveAlt()">
@@ -1260,11 +1259,9 @@
   <div class="alt-config" id="alt-config">
     <div class="alt-label">DESTINATION</div>
     <div id="alt-dest-box"></div>
-    <div class="alt-label">STARTING STATIONS (UP TO 3)</div>
-    <div class="alt-origin"><div class="alt-chip"><span class="name" id="alt-home">—</span></div>
-      <span class="alt-walk" id="alt-home-walk">—</span></div>
-    <div id="alt-origins"></div>
-    <div class="alt-add" id="alt-add-box"></div>
+    <div class="alt-label">GET THERE BY</div>
+    <input type="time" class="arrive-time" id="arrive-time" value="09:00" onchange="saveAlt()">
+    <div class="alt-from" id="alt-from">—</div>
   </div>
   <div class="toggle-row">
     <div>
@@ -1566,7 +1563,7 @@ let nightOff         = false;   // ...and the panel is actually dark for it
 // ── API helper ────────────────────────────────────────────────────────────
 async function api(path, body) {
   const sep = path.includes('?') ? '&' : '?';
-  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle', '/api/scores', '/api/preview-scores', '/api/alt-route'].some(p => path.startsWith(p))
+  const url = ['/api/config', '/api/status', '/api/test-pattern', '/api/weather', '/api/preview-arrival', '/api/night-skip', '/api/preview-occasion', '/api/turtle', '/api/scores', '/api/preview-scores', '/api/arrive-plan'].some(p => path.startsWith(p))
     ? `${path}${sep}panel_id=${encodeURIComponent(panelId)}` : path;
   const opts = body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -1860,9 +1857,10 @@ async function init() {
   }
 
   trains = [
-    { line: cfg.line, station: { id: cfg.stop_parent, name: cfg.stop_name },
+    // A new panel has no line/station yet: nothing is assumed until the user picks.
+    { line: cfg.line || null, station: cfg.stop_parent ? { id: cfg.stop_parent, name: cfg.stop_name } : null,
       platform: cfg.platform || 'N', walk: cfg.walk_minutes ?? 10 },
-    { line: cfg.line2 || cfg.line,
+    { line: cfg.line2 || cfg.line || null,
       station: cfg.stop_parent2 ? { id: cfg.stop_parent2, name: cfg.stop_name2 } : null,
       platform: cfg.platform2 || 'S', walk: cfg.walk_minutes2 ?? 10 },
   ];
@@ -1885,9 +1883,10 @@ async function init() {
   document.getElementById('toggle-dual').checked       = dualOn;
   document.getElementById('toggle-both').checked       = bothOn;
   document.getElementById('toggle-animations').checked = !!cfg.animations;
-  altCfg = { on: !!cfg.alt_routes, dest: cfg.alt_dest ? { id: cfg.alt_dest, name: cfg.alt_dest_name || cfg.alt_dest } : null,
-             origins: (cfg.alt_origins || []).map(o => ({ ...o })) };
+  altCfg = { on: !!cfg.arrive_by,
+             dest: cfg.arrive_dest ? { id: cfg.arrive_dest, name: cfg.arrive_dest_name || cfg.arrive_dest } : null };
   document.getElementById('toggle-alt').checked        = altCfg.on;
+  document.getElementById('arrive-time').value         = cfg.arrive_time || '09:00';
   renderAlt();
   if (Array.isArray(cfg.layout_single)) layouts.single = cfg.layout_single.map(e => [...e]);
   if (Array.isArray(cfg.layout_two)) layouts.two = cfg.layout_two.map(e => [...e]);
@@ -1969,6 +1968,12 @@ function selectLine(id) {
 
 async function loadStations(line, preselectId) {
   const list = document.getElementById('station-list');
+  if (!line) {                                   // new panel: no line picked yet
+    allStations = [];
+    document.getElementById('station-route').textContent = '';
+    list.innerHTML = '<div class="station-empty">Pick your line above first</div>';
+    return;
+  }
   list.innerHTML = '<div class="loading-row"><span class="spinner"></span> Loading stations...</div>';
   document.getElementById('station-search').value = '';
   const req = ++stationsReq;
@@ -2109,7 +2114,8 @@ function updateOptionsSummary() {
   if (!twoRows && !custom && on('toggle-leave-by')) parts.push('Leave by');
   if (!twoRows && !custom && on('toggle-alerts')) parts.push('Alerts');
   if (!twoRows && !custom && on('toggle-weather')) parts.push('Weather');
-  if (on('toggle-alt') && altCfg.dest) parts.push(`Faster route → ${altCfg.dest.name.replace(/ \(.*\)$/, '')}`);
+  if (on('toggle-alt') && altCfg.dest) parts.push(`Arrive at ${altCfg.dest.name.replace(/ \(.*\)$/, '')} by ` +
+                                                  clockLabel(document.getElementById('arrive-time').value || '09:00'));
   if (on('toggle-animations')) parts.push('Animations');
   if (on('toggle-night')) {
     parts.push(`Night off ${clockLabel(document.getElementById('night-start').value || '01:00')}–` +
@@ -2220,14 +2226,17 @@ const EDIT_COLORS = ['#ffffff', '#ffdc00', '#32a0ff', '#ff4040', '#00c850', '#ff
 
 function sampleData() {
   const t1 = trainAt(0), t2 = bothOn ? t1 : trainAt(1);
-  const line = t1?.line || 'L', line2 = t2?.line || line;
+  const line = t1?.line || '', line2 = t2?.line || line;
   const now = new Date(), h = now.getHours() % 12 || 12;
   const time = document.getElementById('time-color').value || '#ffffff';
   return {
     line, line2, lineRgb: PanelSim.hexToRgb(LINE_COLORS[line] || '#888888'),
     line2Rgb: PanelSim.hexToRgb(LINE_COLORS[line2] || '#888888'),
     time: '8:42', time2: '8:51', leave: '8:32', mins: 7, mins2: 16,
-    alert: `${line} trains are running with delays`, wx: '\x0452\x11\x12\x10',
+    alert: `${line ? line + ' trains are' : 'Trains are'} running with delays`, wx: '\x0452\x11\x12\x10',
+    deadline: altCfg.on && altCfg.dest
+      ? `Leave no later than 8:12 to reach ${altCfg.dest.name.replace(/ \(.*\)$/, '').slice(0, 22)} by ${clockLabel(document.getElementById('arrive-time').value || '09:00').replace(/ ?[AP]M$/i, '')}`
+      : '',
     clock: `${h}:${String(now.getMinutes()).padStart(2, '0')}`, label: layoutLabel, status: 1,
     timeRgb: PanelSim.hexToRgb(time), colorAll: document.getElementById('toggle-color-all').checked,
   };
@@ -2330,7 +2339,8 @@ function renderEditorSide() {
   if (kind === 'ticker') {
     html += `<div class="prop-row"><span>WIDTH</span><input type="range" min="12" max="64" value="${e[3]}"
                oninput="setProp(3, +this.value, true)"></div>
-             <div class="prop-row"><span>ALSO</span>${btn('Leave by', e[4] & 1, 'toggleBit(1)')}${btn('Weather', e[4] & 2, 'toggleBit(2)')}</div>`;
+             <div class="prop-row"><span>ALSO</span>${btn('Weather', e[4] & 2, 'toggleBit(2)')}</div>
+             <div class="toggle-hint" style="margin-top:8px">Scrolls service alerts${altCfg.on ? ' and your Arrive By "Leave no later than …"' : ''} · leave-by is its own piece</div>`;
   }
   if (t !== PS.EL.dot && kind !== 'bullet') {
     html += `<div class="prop-row"><span>COLOR</span>
@@ -2460,14 +2470,14 @@ async function saveCustomToggle(on) {
   updateOptionsUI();
 }
 
-// ── Faster route ──────────────────────────────────────────────────────────
-// Destination + up to 2 more starting stations (the panel's own station from
-// section 02, with the walk time from 05, is always the first).
-const ALT_HINT = 'Suggests another train or station when it gets you to your destination 5+ min sooner · saves instantly';
-let altCfg = { on: false, dest: null, origins: [] };
+// ── Arrive By ─────────────────────────────────────────────────────────────
+// Destination + arrive-by time. The trip starts at the station picked in 02
+// (walk time from 05); the panel scrolls "Leave no later than ..." for the
+// 3 hours before.
+const ALT_HINT = 'Pick where you\'re going and when you need to be there · the panel scrolls "Leave no later than …" · saves instantly';
+let altCfg = { on: false, dest: null };
 let everyStation = null;
-let altSearch = null;         // which picker is open: 'dest' | 'origin' | null
-let altWalkTimer = null;
+let altSearch = null;         // 'dest' while the destination picker is open
 
 async function loadAllStations() {
   if (!everyStation) {
@@ -2491,8 +2501,9 @@ function renderAlt() {
   const on = document.getElementById('toggle-alt').checked;
   document.getElementById('alt-config').classList.toggle('show', on);
   const t1 = trainAt(0);
-  document.getElementById('alt-home').textContent = t1?.station ? `${t1.station.name} (your station)` : 'Pick a station in 02';
-  document.getElementById('alt-home-walk').textContent = `${t1?.walk ?? walkMinutes} min`;   // set in 05
+  document.getElementById('alt-from').innerHTML = t1?.station
+    ? `From <b>${escapeHtml(t1.station.name)}</b> (02) with a ${t1.walk ?? walkMinutes} min walk (05) · any line, up to one transfer · shows on the panel in the 3 hours before`
+    : 'Pick the panel\'s line and station in 01–02 first — trips start there';
 
   const destBox = document.getElementById('alt-dest-box');
   if (altCfg.dest && altSearch !== 'dest') {
@@ -2501,18 +2512,6 @@ function renderAlt() {
   } else if (altSearch !== 'dest' || !document.getElementById('alt-dest-q')) {
     destBox.innerHTML = pickerHtml('dest', 'Search your destination station...');
   }
-
-  document.getElementById('alt-origins').innerHTML = altCfg.origins.map((o, i) => `
-    <div class="alt-origin">
-      <div class="alt-chip"><span class="name">${escapeHtml(o.name)}</span>
-        <button class="x" onclick="removeAltOrigin(${i})" aria-label="Remove">×</button></div>
-      <span class="alt-walk"><button onclick="altWalk(${i},-1)">−</button>${o.walk} min<button onclick="altWalk(${i},1)">+</button></span>
-    </div>`).join('');
-
-  const addBox = document.getElementById('alt-add-box');
-  if (altCfg.origins.length >= 2) addBox.innerHTML = '';
-  else if (altSearch === 'origin') { if (!document.getElementById('alt-origin-q')) addBox.innerHTML = pickerHtml('origin', 'Another station you can walk to...'); }
-  else addBox.innerHTML = `<button class="hint-link" onclick="openAltPicker('origin')">+ Add a station you can walk to</button>`;
 }
 
 async function openAltPicker(kind) {
@@ -2544,26 +2543,10 @@ function stationLabel(s) {
 function chooseAltStation(kind, id) {
   const st = everyStation.find(s => s.id === id);
   if (!st) return;
-  if (kind === 'dest') altCfg.dest = { id: st.id, name: stationLabel(st) };
-  else if (altCfg.origins.length < 2 && !altCfg.origins.some(o => o.stop === st.id)) {
-    altCfg.origins.push({ stop: st.id, name: stationLabel(st), walk: 8 });
-  }
+  altCfg.dest = { id: st.id, name: stationLabel(st) };
   altSearch = null;
   renderAlt();
   saveAlt();
-}
-
-function removeAltOrigin(i) {
-  altCfg.origins.splice(i, 1);
-  renderAlt();
-  saveAlt();
-}
-
-function altWalk(i, d) {
-  altCfg.origins[i].walk = Math.max(0, Math.min(60, altCfg.origins[i].walk + d));
-  renderAlt();
-  clearTimeout(altWalkTimer);
-  altWalkTimer = setTimeout(saveAlt, 600);
 }
 
 async function saveAlt() {
@@ -2573,23 +2556,24 @@ async function saveAlt() {
   updateOptionsSummary();
   if (on && !altCfg.dest) { showToast('Pick your destination station'); openAltPicker('dest'); }
   await patchConfig({
-    alt_routes: on,
-    alt_dest: altCfg.dest?.id || '',
-    alt_dest_name: altCfg.dest?.name || '',
-    alt_origins: altCfg.origins,
+    arrive_by: on,
+    arrive_dest: altCfg.dest?.id || '',
+    arrive_dest_name: altCfg.dest?.name || '',
+    arrive_time: document.getElementById('arrive-time').value || '09:00',
   }, null);
   refreshAltHint();
+  drawMiniPreview();
 }
 
 async function refreshAltHint() {
   const hint = document.getElementById('alt-hint');
   if (!document.getElementById('toggle-alt').checked || !altCfg.dest) { hint.textContent = ALT_HINT; return; }
   try {
-    const r = await api('/api/alt-route');
+    const r = await api('/api/arrive-plan');
     if (!r.ok) { hint.textContent = ALT_HINT; return; }
-    if (!r.best) hint.textContent = 'No trains to your destination in the next 45 min right now';
-    else if (r.active) hint.textContent = `Panel is suggesting: ${r.best}` + (r.usual ? ` (${r.saves} min sooner)` : '');
-    else hint.textContent = `Right now your usual train is best: ${r.usual || r.best}`;
+    if (r.state === 'none') { hint.textContent = 'No route found to that station right now — check the MTA feeds or pick another destination'; return; }
+    hint.textContent = (r.on_panel ? 'On the panel now: ' : 'Right now it would say: ') + r.text +
+                       (r.route ? ` · ${r.route}` : '') + (r.on_panel ? '' : ' (shows in the 3 hours before)');
   } catch (e) { hint.textContent = ALT_HINT; }
 }
 

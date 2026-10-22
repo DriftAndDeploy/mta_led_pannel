@@ -62,6 +62,7 @@ WEATHER_RETRY_S   = 120    # after a failed fetch, wait this long before retryin
 UMBRELLA_HOURS    = 12     # look this far ahead for rain
 UMBRELLA_CHANCE   = 50     # % chance of rain in any of those hours -> umbrella
 NYC_CENTER        = (40.7128, -74.0060)
+SETUP_MSG         = "Pick your line and station at whenisthetraincoming.com"
 
 ARRIVING_WINDOW_S = 60     # a train due within this many seconds is "arriving"
 
@@ -115,10 +116,11 @@ DIRECTION_LABELS.update({
 # element's usual colour. Types 8 and 12 (countdowns) were removed in v7.9.
 EL = {"bullet": 1, "time": 2, "leave": 3, "ticker": 4, "weather": 5, "dot": 6, "clock": 7,
       "label": 9, "bullet2": 10, "time2": 11}
-LAYOUT_V = 2       # v1 (7.8): leave a = format; v2: leave a = font size, b bit 2 = format
+LAYOUT_V = 3       # v1 (7.8): leave a = format; v2: leave a = font size, b bit 2 = format;
+                   # v3: ticker drops leave-by (bit 0), size in b bits 2-3 is 0-3 (was size - 1)
 LAYOUT_PRESETS = {
     "standard":   [[EL["time"], 32, 0, 2, 1, 0], [EL["bullet"], 8, 24, 7, 0, 0],
-                   [EL["ticker"], 17, 20, 47, 3, 0]],
+                   [EL["ticker"], 17, 20, 47, 6, 0]],
     "minimalist": [[EL["dot"], 2, 1, 0, 0, 0], [EL["bullet"], 21, 16, 7, 0, 0],
                    [EL["time"], 33, 12, 1, 0, 0]],
     "two_rows":   [[EL["bullet"], 6, 8, 6, 0, 0], [EL["time"], 59, 1, 2, 2, 0],
@@ -127,9 +129,9 @@ LAYOUT_PRESETS = {
 MAX_LAYOUT_ELEMENTS = 16
 
 DEFAULT_CONFIG = {
-    "line":          "L",
-    "stop_parent":   "L14",
-    "stop_name":     "Morgan Av",
+    "line":          "",     # no home station until the user picks one in the web app
+    "stop_parent":   "",
+    "stop_name":     "",
     "platform":      "N",
     "walk_minutes":  10,
     "show_leave_by": True,
@@ -150,10 +152,10 @@ DEFAULT_CONFIG = {
     "layout_two":    LAYOUT_PRESETS["two_rows"],   # used by Two Trains and Both Directions
     "layout_label":  "HOME",
     "layout_v":      LAYOUT_V,
-    "alt_routes":    False,  # suggest a faster route to alt_dest
-    "alt_dest":      "",
-    "alt_dest_name": "",
-    "alt_origins":   [],     # up to 2 more stations you can walk to: {stop, name, walk}
+    "arrive_by":     False,  # scroll "Leave no later than ..." before arrive_time
+    "arrive_dest":   "",
+    "arrive_dest_name": "",
+    "arrive_time":   "09:00",
     "show_scores":   False,  # live game score card every 2 min while a game is on
     "scores_mlb":    True,
     "scores_nba":    True,
@@ -164,9 +166,9 @@ DEFAULT_CONFIG = {
     "both_dirs":     False,
     # Two-train mode: a second line/station shown as a second row.
     "dual":          False,
-    "line2":         "L",
-    "stop_parent2":  "L14",
-    "stop_name2":    "Morgan Av",
+    "line2":         "",
+    "stop_parent2":  "",
+    "stop_name2":    "",
     "platform2":     "S",
     "walk_minutes2": 10,
 }
@@ -247,7 +249,19 @@ def migrate_config(raw: dict) -> dict:
                         e[3], e[4] = 1, (e[4] & 3) | (4 if e[3] == 1 else 0)
                     new.append(e)
                 raw[key] = new
-        raw["layout_v"] = LAYOUT_V
+    if raw.get("layout_v", 1) < 3:
+        for key in ("layout_single", "layout_two"):
+            if isinstance(raw.get(key), list):
+                for e in raw[key]:
+                    if isinstance(e, list) and len(e) == 6 and e[0] == EL["ticker"] and isinstance(e[4], int):
+                        e[4] = (e[4] & 2) | ((((e[4] >> 2) & 3) + 1) << 2)
+    raw["layout_v"] = LAYOUT_V
+    # Faster Route (removed in v8.0): keep its destination for Arrive By.
+    if "alt_dest" in raw:
+        if raw.get("alt_dest") and not raw.get("arrive_dest"):
+            raw["arrive_dest"], raw["arrive_dest_name"] = raw["alt_dest"], raw.get("alt_dest_name", "")
+        for k in ("alt_routes", "alt_dest", "alt_dest_name", "alt_origins"):
+            raw.pop(k, None)
     # Minimalist mode (removed in v7.9) becomes the Minimalist custom layout.
     if raw.pop("minimalist", False) and not raw.get("custom_layout"):
         lay = [list(e) for e in LAYOUT_PRESETS["minimalist"]]
@@ -256,8 +270,14 @@ def migrate_config(raw: dict) -> dict:
         wx = raw.get("show_weather", DEFAULT_CONFIG["show_weather"])
         if leave or alerts or wx:                             # second row, like before
             lay[1][2], lay[2][2] = 13, 9
-            if leave or alerts:
-                lay.append([EL["ticker"], 0, 24, 64, (1 if leave else 0) | (2 if wx else 0), 0])
+            if alerts:
+                lay.append([EL["ticker"], 0, 24, 64, 4 | (2 if wx else 0), 0])
+                if leave:
+                    lay.append([EL["leave"], 63, 1, 0, 2, 0])       # tiny, top right
+            elif leave:
+                lay.append([EL["leave"], 32, 24, 1, 1, 0])
+                if wx:
+                    lay.append([EL["weather"], 63, 1, 1, 2, 0])
             else:
                 lay.append([EL["weather"], 32, 24, 1, 1, 0])
         raw["custom_layout"], raw["layout_single"] = True, lay
@@ -355,19 +375,6 @@ CONFIG_SCHEMA = {
 }
 
 
-def _alt_origins(v):
-    if not isinstance(v, list) or len(v) > MAX_ALT_ORIGINS:
-        raise ValueError(f"must be a list of up to {MAX_ALT_ORIGINS} stations")
-    out = []
-    for o in v:
-        if not isinstance(o, dict):
-            raise ValueError("each station must be an object")
-        stop = _text(8, r"[A-Z0-9]{1,8}")(o.get("stop", ""))
-        out.append({"stop": stop, "name": _text(60)(o.get("name", "") or stop),
-                    "walk": _int_range(0, 60)(o.get("walk", 5))})
-    return out
-
-
 def _layout(v):
     if not isinstance(v, list) or len(v) > MAX_LAYOUT_ELEMENTS:
         raise ValueError(f"must be a list of up to {MAX_LAYOUT_ELEMENTS} elements")
@@ -388,10 +395,10 @@ CONFIG_SCHEMA.update({
     "layout_single": _layout,
     "layout_two":    _layout,
     "layout_label":  _text(15),
-    "alt_routes":    _bool,
-    "alt_dest":      _text(8, r"[A-Z0-9]{0,8}"),
-    "alt_dest_name": _text(60),
-    "alt_origins":   _alt_origins,
+    "arrive_by":     _bool,
+    "arrive_dest":   _text(8, r"[A-Z0-9]{0,8}"),
+    "arrive_dest_name": _text(60),
+    "arrive_time":   _text(5, r"(?:[01]\d|2[0-3]):[0-5]\d"),
 })
 
 
@@ -1282,24 +1289,24 @@ def score_payload(cfg: dict) -> dict:
             "score_msg": f"NEXT {nxt}" if nxt else ("NO GAMES TODAY" if not games else "NO LIVE GAMES")}
 
 
-# ── Alternate routes ──────────────────────────────────────────────────────
+# ── Arrive By (route planning) ────────────────────────────────────────────
 #
-# With a destination station set, the server works out, from the live
-# feeds of every line, when you'd actually arrive by each option: your
-# usual train, or any train from up to 3 starting stations, direct or with
-# one transfer. Each live trip lists its predicted time at every stop still
-# ahead of it, so "arrive at destination" comes straight from the MTA.
-# Transfers are any two stations within ALT_WALK_RADIUS_M of each other
-# (real transfer complexes like Union Sq, plus short street walks), costing
-# 2 min + walking time. The panel only switches to an alternative when it
-# arrives ALT_MIN_SAVE_MIN or more minutes sooner than your usual train.
+# With a destination station and an arrive-by time set, the server works
+# out, from the live feeds of every line, the latest you can leave the
+# panel's station (minus the walk there) and still make it: any train,
+# direct or with one transfer. Each live trip lists its predicted time at
+# every stop still ahead of it, so "arrive at destination" comes straight
+# from the MTA. Transfers are any two stations within ALT_WALK_RADIUS_M of
+# each other (real transfer complexes like Union Sq, plus short street
+# walks), costing 2 min + walking time. Live trips only reach about an hour
+# ahead, so until they cover the arrive-by time the answer is an estimate
+# (fastest current trip + ARRIVE_WAIT_MIN for waiting), shown with a "~".
 
 ALT_WALK_RADIUS_M = 300
 ALT_SAME_STOP_MIN = 1.0     # change trains at the same platform/station
-ALT_MIN_SAVE_MIN  = 5
-ALT_MAX_WAIT_MIN  = 45      # ignore trains leaving more than this far ahead
-ALT_TTL_S         = 30
-MAX_ALT_ORIGINS   = 2       # extra starting stations (plus the panel's own)
+ARRIVE_WINDOW_H   = 3       # scroll the message this long before the arrive-by time
+ARRIVE_WAIT_MIN   = 8       # estimate: allowance for waiting on the platform
+ARRIVE_TTL_S      = 30
 
 _nearby: dict | None = None
 
@@ -1361,7 +1368,7 @@ def live_trips() -> list[dict]:
 
 
 def plan_routes(origins: list[tuple[str, int]], dest: str, now: datetime,
-                trips: list[dict]) -> list[dict]:
+                trips: list[dict], max_wait: float = 45) -> list[dict]:
     """Every direct and one-transfer option from the origins to dest.
     origins: [(station, walk minutes)]. Each option: origin, walk, line,
     dir, board, via, line2, arrive (datetime, includes the final walk)."""
@@ -1391,7 +1398,7 @@ def plan_routes(origins: list[tuple[str, int]], dest: str, now: datetime,
     options = []
     for origin, walk in origins:
         ready = now + timedelta(minutes=walk)
-        latest = ready + timedelta(minutes=ALT_MAX_WAIT_MIN)
+        latest = ready + timedelta(minutes=max_wait)
         lst = at_stop.get(origin, [])
         for dep, ti, i in lst[bisect.bisect_left(times.get(origin, []), ready):]:
             if dep > latest:
@@ -1429,16 +1436,9 @@ def _station_name(p: str, names: dict | None = None) -> str:
     return (names or {}).get(p) or static_stations().get(p, {}).get("name", p)
 
 
-def _saved_names(cfg: dict) -> dict:
-    return {cfg["stop_parent"]: cfg["stop_name"],
-            **{o["stop"]: o["name"] for o in cfg.get("alt_origins", []) if o.get("name")}}
-
-
 def describe_route(o: dict, names: dict | None = None) -> str:
-    """'From Flushing Av (leave 8:41): J to Myrtle Av, then M. Arrive 9:22'."""
-    leave = fmt_time(o["board"] - timedelta(minutes=o["walk"]))
-    text = f"From {_station_name(o['origin'], names)} (leave {leave}): {o['line']}{_transfer_text(o, names)}"
-    return f"{text}. Arrive {fmt_time(o['arrive'])}"
+    """'J at 8:47 to Myrtle Av, then M. Arrive 9:22'."""
+    return f"{o['line']} at {fmt_time(o['board'])}{_transfer_text(o, names)}. Arrive {fmt_time(o['arrive'])}"
 
 
 def _transfer_text(o: dict, names: dict | None = None) -> str:
@@ -1450,55 +1450,85 @@ def _transfer_text(o: dict, names: dict | None = None) -> str:
     return f" to {off}, then {o['line2']}" if off == on else f" to {off}, walk to {on}, then {o['line2']}"
 
 
-_alt_cache: dict = {}
+_arrive_cache: dict = {}
 
 
-def alt_route(cfg: dict, now: datetime) -> dict:
-    """{'usual': option|None, 'best': option|None, 'active': bool, 'saves': min}."""
-    dest = cfg.get("alt_dest") or ""
-    home = cfg["stop_parent"]
-    origins = [(home, cfg["walk_minutes"])] + [(o["stop"], o["walk"]) for o in cfg.get("alt_origins", [])
-                                               if o.get("stop") and o["stop"] != home]
-    key = (dest, tuple(origins), cfg["line"], cfg["platform"], int(now.timestamp() // ALT_TTL_S))
-    if key in _alt_cache:
-        return _alt_cache[key]
-    result = {"usual": None, "best": None, "active": False, "saves": 0}
-    if dest:
-        try:
-            options = plan_routes(origins, dest, now, live_trips())
-        except Exception:
-            log.exception("Alternate route planning failed")
-            options = []
-        usual = next((o for o in options if o["origin"] == home and o["line"] == cfg["line"]
-                      and o["dir"] == cfg["platform"]), None)
-        best = options[0] if options else None
-        saves = int((usual["arrive"] - best["arrive"]).total_seconds() // 60) if usual and best else 0
-        active = bool(best) and (usual is None or saves >= ALT_MIN_SAVE_MIN)
-        if active and usual and (best["origin"], best["line"], best["via"]) == (usual["origin"], usual["line"], usual["via"]):
-            active = False
-        result = {"usual": usual, "best": best, "active": active, "saves": saves}
-    _alt_cache.clear()
-    _alt_cache[key] = result
-    return result
+def arrive_target(cfg: dict, now: datetime) -> datetime:
+    h, m = (int(x) for x in cfg["arrive_time"].split(":"))
+    return now.replace(hour=h, minute=m, second=0, microsecond=0)
 
 
-def alt_payload(cfg: dict, now: datetime) -> dict:
-    """Panel fields: alt=1 swaps the display to the faster route."""
-    if not cfg.get("alt_routes") or not cfg.get("alt_dest") or cfg["demo"]:
-        return {"alt": 0}
-    r = alt_route(cfg, now)
-    if not r["active"]:
-        return {"alt": 0}
-    b = r["best"]
-    # Short for the panel: "ALT: Flushing Av, leave 8:41. J to Myrtle Av, then M. Arr 9:22 (6 min sooner)"
-    names = _saved_names(cfg)
-    leave = fmt_time(b["board"] - timedelta(minutes=b["walk"]))
-    text = f"ALT: {_station_name(b['origin'], names)}, leave {leave}. {b['line']}{_transfer_text(b, names)}"
-    text += f". Arr {fmt_time(b['arrive'])}"
-    text += f" ({r['saves']} min sooner)" if r["usual"] else " (usual train doesn't get there)"
-    cr, cg, cb = hex_to_rgb(LINE_COLORS.get(b["line"], "#888888"))
-    return {"alt": 1, "alt_line": b["line"][:2], "alt_time": fmt_time(b["board"]),
-            "alt_r": cr, "alt_g": cg, "alt_b": cb, "alt_text": text[:140]}
+def arrive_plan(cfg: dict, now: datetime, window: bool = True) -> dict | None:
+    """When to leave the panel's station to reach arrive_dest by arrive_time.
+    {'state': 'exact' | 'estimate' | 'late' | 'none', 'leave', 'arrive',
+    'target', 'option'}; None when not set up (or, with window, outside the
+    hours before the arrive-by time)."""
+    dest, home, walk = cfg.get("arrive_dest") or "", cfg["stop_parent"], cfg["walk_minutes"]
+    if not dest or not home or not cfg.get("arrive_time"):
+        return None
+    target = arrive_target(cfg, now)
+    if target < now - timedelta(minutes=1):
+        target += timedelta(days=1)                   # already passed today: tomorrow's
+    if window and target - now > timedelta(hours=ARRIVE_WINDOW_H):
+        return None
+    key = (dest, home, walk, cfg["arrive_time"], window, int(now.timestamp() // ARRIVE_TTL_S))
+    if key in _arrive_cache:
+        return _arrive_cache[key]
+    try:
+        ahead = (target - now).total_seconds() / 60
+        options = plan_routes([(home, walk)], dest, now, live_trips(), max_wait=min(ahead, 240) + 30)
+    except Exception:
+        log.exception("Arrive By planning failed")
+        options = []
+    plan = {"state": "none", "leave": None, "arrive": None, "target": target, "option": None}
+    if options:
+        on_time = [o for o in options if o["arrive"] <= target]
+        covered = any(o["arrive"] > target for o in options)    # live data reaches the deadline
+        if on_time and covered:
+            o = max(on_time, key=lambda o: (o["board"], -o["arrive"].timestamp()))
+            plan.update(state="exact", option=o, arrive=o["arrive"],
+                        leave=o["board"] - timedelta(minutes=walk))
+        elif not covered:
+            fastest = min(options, key=lambda o: o["arrive"] - o["board"])
+            leave = target - (fastest["arrive"] - fastest["board"]) - timedelta(minutes=walk + ARRIVE_WAIT_MIN)
+            if on_time:                               # a train we can see already works
+                best = max(on_time, key=lambda o: o["board"])
+                leave = max(leave, best["board"] - timedelta(minutes=walk))
+            plan.update(state="estimate", option=fastest, leave=leave.replace(second=0, microsecond=0))
+            if leave < now:
+                plan.update(state="late", option=options[0], arrive=options[0]["arrive"], leave=now)
+        else:                                         # nothing gets there in time
+            plan.update(state="late", option=options[0], arrive=options[0]["arrive"], leave=now)
+    _arrive_cache.clear()
+    _arrive_cache[key] = plan
+    return plan
+
+
+def _short_name(name: str, limit: int = 22) -> str:
+    name = re.sub(r" \(.*\)$", "", name or "")                # drop "(4 5 6)"
+    return name if len(name) <= limit else name[:limit - 1].rstrip() + "."
+
+
+def arrive_text(cfg: dict, plan: dict) -> str:
+    """'Leave no later than 8:12 to reach 14 St-Union Sq by 9:00'."""
+    name = _short_name(cfg.get("arrive_dest_name") or _station_name(cfg["arrive_dest"]))
+    by = fmt_time(plan["target"])
+    if plan["state"] == "exact":
+        return f"Leave no later than {fmt_time(plan['leave'])} to reach {name} by {by}"
+    if plan["state"] == "estimate":
+        return f"Leave no later than ~{fmt_time(plan['leave'])} to reach {name} by {by}"
+    if plan["state"] == "late":
+        late = int((plan["arrive"] - plan["target"]).total_seconds() // 60)
+        return f"Leave now: you'd reach {name} at {fmt_time(plan['arrive'])}" + (f" ({late} min late)" if late > 0 else "")
+    return ""
+
+
+def arrive_msg(cfg: dict, now: datetime) -> str:
+    """Panel ticker text (empty outside the window or when turned off)."""
+    if not cfg.get("arrive_by"):
+        return ""
+    plan = arrive_plan(cfg, now)
+    return arrive_text(cfg, plan)[:79] if plan else ""
 
 
 def arriving_train(feed, stop_id: str, line: str, now: datetime) -> int:
@@ -1564,10 +1594,14 @@ def next_trains():
         platform = "N"          # row 1 = N (uptown etc.), row 2 = S
 
     now = datetime.now(tz=EASTERN)
-    train_time, leave_by, error = train_times(panel_id, line, stop_parent, platform,
-                                              cfg["walk_minutes"], now)
-
-    alert_text, level = alert_for_line(line, now.timestamp())
+    configured = line in LINES and bool(stop_parent)      # a fresh panel has no station yet
+    if configured:
+        train_time, leave_by, error = train_times(panel_id, line, stop_parent, platform,
+                                                  cfg["walk_minutes"], now)
+        alert_text, level = alert_for_line(line, now.timestamp())
+    else:
+        train_time, leave_by, error = "--:--", "", "setup"
+        alert_text, level = SETUP_MSG, 0
     r, g, b = hex_to_rgb(LINE_COLORS.get(line, "#888888"))
     fw = firmware_info() if cfg["auto_update"] else None
     # A custom layout shows whatever elements it contains, whatever the
@@ -1578,12 +1612,13 @@ def next_trains():
         layout = cfg["layout_two"] if two_rows else cfg["layout_single"]
     kinds = {e[0] for e in layout or []}
     tickers = [e for e in layout or [] if e[0] == EL["ticker"]]
-    show_leave = cfg["show_leave_by"] if layout is None else (
-        EL["leave"] in kinds or any(e[4] & 1 for e in tickers))
+    show_leave = cfg["show_leave_by"] if layout is None else EL["leave"] in kinds
     show_alerts = cfg["show_alerts"] if layout is None else bool(tickers)
+    if not configured:
+        show_alerts = True                                    # scroll the "pick a station" hint
     show_wx = cfg["show_weather"] if layout is None else (
         EL["weather"] in kinds or any(e[4] & 2 for e in tickers))
-    wx = get_weather(stop_parent) if show_wx else None
+    wx = get_weather(stop_parent) if show_wx and configured else None
 
     # Always 200: even when the MTA is down the panel still needs its
     # brightness / power / colour settings.
@@ -1614,7 +1649,7 @@ def next_trains():
         # nonzero = play the arriving-train animation once for this id
         "arriving":       0,
     }
-    if cfg["animations"]:
+    if cfg["animations"] and configured:
         payload["arriving"] = arrival_id(panel_id, line, stop_parent + platform, now)
     preview = cfg.get("preview_arrival") or {}
     if preview.get("until", 0) > time.time():
@@ -1635,7 +1670,7 @@ def next_trains():
                                if cfg["animations"] else 0,
         })
         payload["error"] = payload["error"] or error2
-    elif cfg["dual"] and not cfg["demo"]:
+    elif cfg["dual"] and not cfg["demo"] and cfg["line2"] in LINES and cfg["stop_parent2"]:
         line2 = cfg["line2"]
         time2, _, error2 = train_times(panel_id, line2, cfg["stop_parent2"], cfg["platform2"],
                                        cfg["walk_minutes2"], now)
@@ -1655,7 +1690,7 @@ def next_trains():
         payload.update({"layout": layout, "label": cfg["layout_label"],
                         "clock_s": now.hour * 3600 + now.minute * 60 + now.second})
     payload.update(score_payload(cfg))
-    payload.update(alt_payload(cfg, now) if not payload.get("scores_only") else {"alt": 0})
+    payload["dl_msg"] = "" if payload.get("scores_only") or not configured or cfg["demo"] else arrive_msg(cfg, now)
     if wifi_new:
         payload["wifi_new"] = wifi_new
     return jsonify(payload)
@@ -1816,17 +1851,26 @@ def api_all_stations():
     return jsonify(cache.get(("all-stations",), STATIONS_TTL_S, load))
 
 
-@app.get("/api/alt-route")
-def api_alt_route():
-    """What the panel would suggest right now (for the web app's hint)."""
+@app.get("/api/arrive-plan")
+def api_arrive_plan():
+    """What Arrive By says right now (for the web app's hint), even outside
+    the hours when the panel shows it."""
     cfg = load_config(require_panel_id())
-    if not cfg.get("alt_dest"):
-        return jsonify({"ok": False, "reason": "no destination"})
-    r = alt_route(cfg, datetime.now(tz=EASTERN))
-    def brief(o):
-        return describe_route(o, _saved_names(cfg)) if o else None
-    return jsonify({"ok": True, "active": r["active"], "saves": r["saves"],
-                    "usual": brief(r["usual"]), "best": brief(r["best"])})
+    now = datetime.now(tz=EASTERN)
+    plan = arrive_plan(cfg, now, window=False)
+    if not plan:
+        return jsonify({"ok": False})
+    shown = plan["target"] - now <= timedelta(hours=ARRIVE_WINDOW_H)
+    o = plan["option"]
+    if not o:
+        route = None
+    elif plan["state"] == "estimate":                 # o is the fastest trip right now, not "the" train
+        ride = int((o["arrive"] - o["board"]).total_seconds() // 60)
+        route = f"Estimate from the fastest trip right now: {o['line']}{_transfer_text(o)}, {ride} min"
+    else:
+        route = describe_route(o)
+    return jsonify({"ok": True, "state": plan["state"], "text": arrive_text(cfg, plan),
+                    "route": route, "on_panel": shown})
 
 
 @app.get("/api/scores")

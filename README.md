@@ -139,9 +139,13 @@ protects against crashes, not against firmware that runs but misbehaves.
 
 ## What the panel shows
 
+- **New panel:** nothing is assumed about where it lives. Until a line and
+  station are picked in the web app it shows `--:--` and scrolls "Pick your
+  line and station at whenisthetraincoming.com".
 - **Normal:** next catchable train time (top), line bullet + scrolling text
-  along the bottom in this order: "Leave by" (white), weather, service alert
-  (yellow) — each only if it's turned on (and, for alerts, if there is one).
+  along the bottom in this order: Arrive By's "Leave no later than …" (green),
+  "Leave by" (white), weather, service alert (yellow) — each only if it's
+  turned on (and, for alerts, if there is one).
 - **Minimalist** is now a preset in **07 Customize Layout** (bullet + time
   centred, 2×2 status dot: green normal, yellow alerts/changes, red suspended).
   Panels that had the old Minimalist Mode toggle on were switched to that
@@ -151,17 +155,18 @@ protects against crashes, not against firmware that runs but misbehaves.
   a 50% chance of rain in the next 12 hours (or it's raining now). Normal mode
   shows it beside the bullet, or at the front of the scrolling text. Data from Open-Meteo (free, no key),
   refreshed every 15 min; if it can't be reached the panel just hides it.
-- **Faster Route** (**Display Options → Faster Route**): pick a destination
-  station and up to two more stations you can walk to (with walk times; your
-  panel's station from 02/05 is always the first). Using the live feeds of every
-  line, the Pi works out when each option would actually get you there: direct,
-  or with one transfer (any two stations within ~300 m count, e.g. Union Sq or
-  Broadway-Lafayette/Bleecker, with walking time added). If something beats your
-  usual train by **5+ minutes**, the panel switches to it: the bullet and
-  departure time of the train to take, and a scrolling line naming the station,
-  e.g. "ALT: Flushing Av (M), leave 7:40. M to Broadway-Lafayette St, walk to
-  Bleecker St, then 6. Arr 8:11 (12 min sooner)". The toggle's hint shows the
-  current suggestion.
+- **Arrive By** (**Display Options → Arrive By**): pick a destination station
+  and the time you need to be there. Starting from the panel's station (02)
+  plus its walk time (05), the Pi uses the live feeds of every line (direct,
+  or one transfer — any two stations within ~300 m count, with walking time
+  added) to find the latest you can leave. In the 3 hours before the deadline
+  the panel scrolls e.g. "Leave no later than 8:12 to reach 14 St-Union Sq by
+  9:00". Live trips only reach about an hour ahead, so until they cover the
+  deadline the time is an estimate, shown with a "~" (fastest trip right now +
+  8 min for waiting). If nothing gets there in time: "Leave now: you'd reach
+  … at 9:07 (7 min late)". The toggle's hint shows what it would say right
+  now and which train it's based on. In a custom layout the message scrolls in
+  the Scrolling text piece.
 - **Live Scores** (**Display Options → Live Scores**, with **MLB** / **NBA**
   sub-toggles) turns the panel into a scoreboard: it shows games *instead of*
   trains, and the train options are locked in the web app until it's turned off
@@ -206,16 +211,17 @@ protects against crashes, not against firmware that runs but misbehaves.
   it): **Open Layout Editor** shows a pixel-exact simulation of the 64×32
   panel. Drag pieces around (they snap to LED pixels), tap one to change it:
   **A− / A+** font size for anything with text (Tiny 3×5, Small 5×7, Big,
-  Bigger, Huge; weather and the scrolling line go Small to Bigger), bullet
-  size, alignment and colour, nudge it with the arrows, or remove it. **Add**
-  offers the train time, line bullet, leave-by time, scrolling ticker (alerts,
-  plus leave-by and weather if ticked), weather, status dot, clock and a short
+  Bigger, Huge; the scrolling text goes Tiny to Bigger, weather Small to
+  Bigger), bullet size, alignment and colour, nudge it with the arrows, or
+  remove it. **Add** offers the train time, line bullet, leave-by time,
+  scrolling text (Arrive By message + service alerts, plus weather if ticked;
+  leave-by is always its own piece), weather, status dot, clock and a short
   custom label. The **One train** tab is the normal screen;
   the **Two rows** tab is used whenever Two Trains or Both Directions is on and
   adds train-2 pieces. Presets (Standard, Minimalist, Two rows) are starting
   points. **Send to Panel** saves both layouts and turns **Use My Layout** on;
   the panel picks it up on its next update (~15 s). Turning the toggle off goes
-  back to the built-in screens without losing your layout. Faster Route, Live
+  back to the built-in screens without losing your layout. Live
   Scores, animations and the night schedule still take over as usual; Leave By /
   Alerts / Weather show whenever their pieces are placed.
 - **Demo** (**⚙ Settings → Demo Mode**): the server rotates a random line/station every 45 s — runs on the

@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "7.9.0"
-#define FW_BUILD   790
+#define FW_VERSION "8.0.0"
+#define FW_BUILD   800
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -108,12 +108,8 @@ struct PanelState {
   struct { uint8_t type; int8_t x, y; uint8_t a, b; uint16_t color; } el[16];
   char     label[16]      = "";     // text for the label element
   uint32_t clock_s        = 0;      // NYC seconds since midnight at the last poll
-  // Faster route (Alternate Routes on, and it saves 5+ min)
-  bool     alt            = false;
-  char     alt_line[4]    = "";
-  char     alt_time[8]    = "";
-  uint8_t  alt_r = 167, alt_g = 169, alt_b = 172;
-  char     alt_text[144]  = "";     // "Faster route: From Flushing Av (leave 8:41): J ..."
+  // Arrive By (web app → 04): "Leave no later than 8:12 for Union Sq (9:00)"
+  char     dl_msg[80]     = "";
   // Scores-only mode (Live Scores on): one game, chosen by the server
   bool     scores_only    = false;  // show games instead of trains
   bool     score_on       = false;  // false: show score_msg instead of a game
@@ -188,7 +184,6 @@ void drawArrival(uint32_t elapsed, const char* line, uint8_t r, uint8_t g, uint8
 uint16_t textColor(const PanelState& s, uint16_t normal);
 void drawOccasion(uint32_t elapsed, uint8_t kind, const char* label);
 void drawScores(const PanelState& s, bool stale);
-void drawAlt(const PanelState& s);
 void drawCustom(const PanelState& s);
 int  drawRun(const char* text, int x, int y, uint16_t color);
 int  runWidth(const char* text);
@@ -207,6 +202,8 @@ void buildWeatherText(const PanelState& s);
 #define CH_DEGREE   '\x11'
 #define CH_GAP      '\x12'   // 3 px spacer
 #define WX_TEXT_COLOR dma_display->color565(150, 200, 255)
+#define DL_TEXT_COLOR dma_display->color565(120, 230, 150)   // "Leave no later than"
+
 
 // Pixel with an optional horizontal clip window (used by scrolling text in
 // custom layouts so it can't spill over neighbouring elements).
@@ -656,11 +653,7 @@ bool fetchTrainTimes() {
   }
   copyStr(n.label, sizeof(n.label), doc["label"] | "");
   n.clock_s = doc["clock_s"] | 0u;
-  n.alt            = (doc["alt"] | 0) != 0;
-  copyStr(n.alt_line, sizeof(n.alt_line), doc["alt_line"] | "");
-  copyStr(n.alt_time, sizeof(n.alt_time), doc["alt_time"] | "");
-  n.alt_r = doc["alt_r"] | 167; n.alt_g = doc["alt_g"] | 169; n.alt_b = doc["alt_b"] | 172;
-  copyStr(n.alt_text, sizeof(n.alt_text), doc["alt_text"] | "");
+  copyStr(n.dl_msg, sizeof(n.dl_msg), doc["dl_msg"] | "");
   n.scores_only    = (doc["scores_only"] | 0) != 0;
   n.score_on       = (doc["score_on"] | 0) != 0;
   n.score_final    = (doc["score_final"] | 0) != 0;
@@ -750,6 +743,7 @@ static int      scroll_x       = PANEL_RES_X;
 static uint32_t scroll_version = 0;
 static char     leave_part[24]  = "";
 static char     alert_part[110] = "";
+static char     dl_part[84]     = "";   // Arrive By: "Leave no later than ..."
 static char     wx_part[16]     = "";   // icon, temp, degree sign, umbrella
 static int      last_brightness = -1;
 static int      last_latch      = -1;
@@ -763,7 +757,7 @@ void render(const PanelState& in) {
     copyStr(s.train_time2, sizeof(s.train_time2), "--:--");
     s.leave_by[0] = '\0';
     s.wx_show = false;
-    s.alt = false;            // never suggest a route from stale data
+    s.dl_msg[0] = '\0';       // never tell you when to leave from stale data
   }
 
   // Latch blanking is baked into the panel's timing data when brightness is
@@ -849,11 +843,13 @@ void render(const PanelState& in) {
     else          leave_part[0] = '\0';
     if (hasAlert) snprintf(alert_part, sizeof(alert_part), "> %s  ", s.alert_msg);
     else          alert_part[0] = '\0';
+    if (s.dl_msg[0]) snprintf(dl_part, sizeof(dl_part), "%s  ", s.dl_msg);
+    else             dl_part[0] = '\0';
     buildWeatherText(s);
     // Only restart the scroll if the text itself changed.
-    static char last_text[160] = "";
-    char text[160];
-    snprintf(text, sizeof(text), "%s%s%s", leave_part, wx_part, alert_part);
+    static char last_text[256] = "";
+    char text[256];
+    snprintf(text, sizeof(text), "%s%s%s%s", dl_part, leave_part, wx_part, alert_part);
     if (strcmp(text, last_text) != 0) {
       copyStr(last_text, sizeof(last_text), text);
       scroll_x = PANEL_RES_X;
@@ -862,8 +858,7 @@ void render(const PanelState& in) {
   }
 
   dma_display->clearScreen();
-  if (s.alt)             drawAlt(s);
-  else if (s.custom)     drawCustom(s);
+  if (s.custom)          drawCustom(s);
   else if (s.dual)       drawDual(s);
   else                   drawNormal(s);
   present();
@@ -890,12 +885,13 @@ void drawNormal(const PanelState& s) {
 
   const int WX_GAP = 12;          // space after the weather in the ticker
   bool weather   = s.wx_show && wx_part[0];
-  bool scrolling = (leave_part[0] || alert_part[0]);
+  bool scrolling = (dl_part[0] || leave_part[0] || alert_part[0]);
 
   dma_display->setTextSize(1);
   if (scrolling) {
-    // Order: leave by (white), weather, service alert (yellow).
+    // Order: arrive-by deadline (green), leave by (white), weather, service alert (yellow).
     int cx = scroll_x;
+    cx = drawRun(dl_part, cx, TEXT_Y, textColor(s, DL_TEXT_COLOR));
     cx = drawRun(leave_part, cx, TEXT_Y, textColor(s, dma_display->color565(255, 255, 255)));
     if (weather) cx = drawRun(wx_part, cx, TEXT_Y, textColor(s, WX_TEXT_COLOR)) + WX_GAP;
     cx = drawRun(alert_part, cx, TEXT_Y, textColor(s, dma_display->color565(255, 220, 0)));
@@ -1433,19 +1429,6 @@ static void drawScoreDigits(const char* t, int cx, uint16_t c) {
   dma_display->setTextSize(1);
 }
 
-// Faster-route screen (replaces the usual layout while it saves 5+ min):
-//   [J] 8:47              <- bullet of the train to take + when it leaves
-//   Faster route: From Flushing Av (leave 8:41): J to Myrtle Av, then M ...
-void drawAlt(const PanelState& s) {
-  static int alt_scroll = PANEL_RES_X;
-  drawBullet(6, 9, 6, s.alt_line, s.alt_r, s.alt_g, s.alt_b);
-  drawBigTime(max(14, 60 - bigTimeWidth(s.alt_time)), 2, s.alt_time,
-              dma_display->color565(s.time_r, s.time_g, s.time_b));
-  int end = drawRun(s.alt_text, alt_scroll, 21, textColor(s, dma_display->color565(230, 190, 60)));
-  alt_scroll--;
-  if (end < 0) alt_scroll = PANEL_RES_X;              // whole message has passed
-}
-
 // Scores-only screen. A game: the card above; a just-won game: confetti in
 // the winner's colours, the winner's abbreviation flashing and "NYY WIN!";
 // no game: "SCORES" and the server's message (e.g. NEXT / NYK 7:30P).
@@ -1617,8 +1600,8 @@ void buildWeatherText(const PanelState& s) {
 //   x,y: bullets = centre; text = anchor (b bits 0-1: 0 left, 1 centre,
 //        2 right) + top
 //   a:   bullet radius 4-7 | font size (text 0-4, weather 1-3) | ticker width
-//   b:   leave bit 2 = time only ("8:32") | ticker bits 0-1 = also leave-by /
-//        weather, bits 2-3 = font size - 1
+//   b:   leave bit 2 = time only ("8:32") | ticker bit 1 = also weather,
+//        bits 2-3 = font size 0-3
 // Font sizes: 0 = 3x5, 1 = 5x7, 2-4 = 5x7 scaled up with 1 px letter
 // spacing and a slim colon (size 2 is the big train time).
 // ---------------------------------------------------------------------------
@@ -1773,9 +1756,10 @@ static int textW(const char* t, int size) {
 // Text with icons (weather, ticker) at font size s (1-3), clipped to
 // [clipL, clipR). Same advances as drawRun() at size 1.
 static int runAdv(char c, int s) {
-  if (c >= 1 && c <= CH_UMBRELLA) return 7 * s + 1;   // icons: 7 px + 1 px gap
-  if (c == CH_DEGREE) return 3 * s + 1;
-  if (c == CH_GAP)    return 3 * s;
+  int k = max(1, s);                                 // icons never go below 1x
+  if (c >= 1 && c <= CH_UMBRELLA) return 7 * k + 1;  // icons: 7 px + 1 px gap
+  if (c == CH_DEGREE) return 3 * k + 1;
+  if (c == CH_GAP)    return 3 * k;
   return charAdv(c, s);
 }
 
@@ -1786,15 +1770,16 @@ static int runW(const char* t, int s) {
 }
 
 static int drawRunClip(const char* text, int x, int y, int s, uint16_t color) {
+  int k = max(1, s);
   for (const char* p = text; *p; p++) {
     char c = *p;
     int adv = runAdv(c, s);
     if (x > clipL - adv && x < clipR) {
-      if (c >= WX_SUN && c <= WX_STORM) drawWxIcon(x, y, c, s);
-      else if (c == CH_UMBRELLA)        drawUmbrella(x, y, s);
+      if (c >= WX_SUN && c <= WX_STORM) drawWxIcon(x, y, c, k);
+      else if (c == CH_UMBRELLA)        drawUmbrella(x, y, k);
       else if (c == CH_DEGREE) {
-        for (int i = 0; i < 3; i++) { blockPx(x + i * s, y, s, color); blockPx(x + i * s, y + 2 * s, s, color); }
-        blockPx(x, y + s, s, color); blockPx(x + 2 * s, y + s, s, color);
+        for (int i = 0; i < 3; i++) { blockPx(x + i * k, y, k, color); blockPx(x + i * k, y + 2 * k, k, color); }
+        blockPx(x, y + k, k, color); blockPx(x + 2 * k, y + k, k, color);
       }
       else if (c != CH_GAP)             drawChar(c, x, y, s, color);
     }
@@ -1818,6 +1803,7 @@ static void drawTextAt(const char* t, int x, int y, int size, int align, uint16_
 
 void drawCustom(const PanelState& s) {
   static int16_t tick_x[16];
+  static int32_t tick_key[16];                     // which ticker each scroll position belongs to
   static bool tick_init = false;
   if (!tick_init) { for (auto& t : tick_x) t = INT16_MIN; tick_init = true; }
   uint16_t timeC  = dma_display->color565(s.time_r, s.time_g, s.time_b);
@@ -1870,16 +1856,18 @@ void drawCustom(const PanelState& s) {
         drawTextAt(s.label, l.x, l.y, size, align, own ? own : white);
         break;
       case EL_TICKER: {
-        // Scrolls in [x, x+a): alerts, plus leave-by (b bit 0) and weather (bit 1).
-        int ts = constrain(((l.b >> 2) & 3) + 1, 1, 3);
-        bool leave = (l.b & 1) && leave_part[0], wx = (l.b & 2) && s.wx_show && wx_part[0];
-        if (!leave && !wx && !alert_part[0]) break;
+        // Scrolls in [x, x+a): Arrive By deadline + alerts, plus weather (b bit 1).
+        int ts = (l.b >> 2) & 3;
+        bool wx = (l.b & 2) && s.wx_show && wx_part[0];
+        if (!dl_part[0] && !wx && !alert_part[0]) break;
         clipL = max(0, (int)l.x);
         clipR = min(PANEL_RES_X, (int)l.x + max(6, (int)l.a));
+        int32_t key = (int32_t)l.x << 16 | (int32_t)l.a << 8 | i;   // new/moved ticker: start over
+        if (tick_key[i] != key) { tick_key[i] = key; tick_x[i] = INT16_MIN; }
         if (tick_x[i] == INT16_MIN) tick_x[i] = clipR;
         int cx = tick_x[i];
-        if (leave) cx = drawRunClip(leave_part, cx, l.y, ts, own ? own : white);
-        if (wx)    cx = drawRunClip(wx_part, cx, l.y, ts, own ? own : textColor(s, WX_TEXT_COLOR)) + 12 * ts;
+        cx = drawRunClip(dl_part, cx, l.y, ts, own ? own : textColor(s, DL_TEXT_COLOR));
+        if (wx) cx = drawRunClip(wx_part, cx, l.y, ts, own ? own : textColor(s, WX_TEXT_COLOR)) + 12 * max(1, ts);
         cx = drawRunClip(alert_part, cx, l.y, ts, own ? own : textColor(s, dma_display->color565(255, 220, 0)));
         tick_x[i]--;
         if (cx < clipL) tick_x[i] = clipR;
