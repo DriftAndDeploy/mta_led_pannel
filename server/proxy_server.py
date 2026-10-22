@@ -817,19 +817,29 @@ def alerts_for_platform(line: str, stop_parent: str, platform: str, now_ts: floa
     return alerts
 
 
-def alert_for_line(line: str, now_ts: float) -> tuple[str, int]:
-    """Most severe alert active right now for this line -> (text, level)."""
+def alert_for_line(line: str, now_ts: float, platform: str | None = None,
+                   stop_parent: str = "") -> tuple[str, int]:
+    """Most severe alert active right now for this line -> (text, level).
+    With a platform (N/S), alerts that only affect the other direction are
+    skipped (same rules as the web app's list); ties go to alerts that name
+    this station."""
     try:
         alerts = get_alerts()
     except Exception:
         log.warning("Alerts unavailable", exc_info=True)
         return "", 0
-    best = None
+    best, best_key = None, None
     for a in alerts:
         if line not in a["routes"] or not _alert_active(a, now_ts):
             continue   # other line, expired or not started yet
-        if best is None or a["level"] > best["level"]:
-            best = a
+        if platform:
+            dirs = alert_directions(a, line)
+            if dirs and platform not in dirs:
+                continue   # only the other direction is affected
+        here = bool(stop_parent) and any(sid.startswith(stop_parent) for sid in a.get("stops", ()))
+        key = (a["level"], here)
+        if best is None or key > best_key:
+            best, best_key = a, key
     return (best["text"], best["level"]) if best else ("", 0)
 
 
@@ -1606,7 +1616,9 @@ def next_trains():
     if configured:
         train_time, leave_by, error = train_times(panel_id, line, stop_parent, platform,
                                                   cfg["walk_minutes"], now)
-        alert_text, level = alert_for_line(line, now.timestamp())
+        # Only alerts for the direction you ride (Both Directions shows both ways).
+        alert_text, level = alert_for_line(line, now.timestamp(),
+                                           None if both_dirs else platform, stop_parent)
     else:
         train_time, leave_by, error = "--:--", "", "setup"
         alert_text, level = SETUP_MSG, 0
@@ -1688,7 +1700,8 @@ def next_trains():
             "train_time2":     time2,
             "line2":           line2,
             "logo2_r": r2, "logo2_g": g2, "logo2_b": b2,
-            "service_status2": alert_for_line(line2, now.timestamp())[1],
+            "service_status2": alert_for_line(line2, now.timestamp(), cfg["platform2"],
+                                              cfg["stop_parent2"])[1],
             "arriving2":       arrival_id(panel_id, line2, cfg["stop_parent2"] + cfg["platform2"], now)
                                if cfg["animations"] else 0,
         })

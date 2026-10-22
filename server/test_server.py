@@ -115,6 +115,35 @@ class Alerts(unittest.TestCase):
             self.assertEqual(ps.alert_for_line("L", now), ("suspended", 2))
             self.assertEqual(ps.alert_for_line("A", now), ("", 0))
 
+    def test_alerts_for_the_other_direction_are_skipped(self):
+        now = 1_000_000
+        alerts = [
+            {"routes": {"L"}, "stops": {"L14S", "L15S"}, "periods": [], "full": "x", "text": "no Canarsie-bound", "level": 2},
+            {"routes": {"L"}, "stops": set(), "periods": [], "full": "Manhattan-bound L trains are delayed",
+             "text": "Mhtn-bound delays", "level": 1},
+            {"routes": {"L"}, "stops": set(), "periods": [], "full": "L trains run every 12 min", "text": "every 12", "level": 1},
+            {"routes": {"L"}, "stops": {"L14N"}, "periods": [], "full": "y", "text": "elevator out here", "level": 1},
+        ]
+        with mock.patch.object(ps, "get_alerts", return_value=alerts):
+            self.assertEqual(ps.alert_for_line("L", now, "S"), ("no Canarsie-bound", 2))
+            self.assertEqual(ps.alert_for_line("L", now, "N"), ("Mhtn-bound delays", 1))       # first of the level-1s
+            self.assertEqual(ps.alert_for_line("L", now, "N", "L14"), ("elevator out here", 1))  # names this station
+            self.assertEqual(ps.alert_for_line("L", now), ("no Canarsie-bound", 2))            # Both Directions: all
+
+    def test_payload_uses_your_direction_except_both_directions(self):
+        c = ps.app.test_client()
+        calls = []
+        def fake(line, ts, platform=None, stop=""):
+            calls.append(platform)
+            return ("", 0)
+        c.post("/api/config?panel_id=AD0001", json={"platform": "N"})
+        with mock.patch.object(ps, "get_feed", side_effect=RuntimeError("x")), \
+             mock.patch.object(ps, "alert_for_line", side_effect=fake):
+            c.get("/next-trains?panel_id=AD0001")
+            c.post("/api/config?panel_id=AD0001", json={"both_dirs": True})
+            c.get("/next-trains?panel_id=AD0001")
+        self.assertEqual(calls, ["N", None])
+
 
 class Api(unittest.TestCase):
     def setUp(self):
@@ -330,7 +359,7 @@ class TwoTrains(unittest.TestCase):
         feeds = {"L": fake_feed("L14S", [at(10, 31)]), "G": fake_feed("G29N", [at(10, 44)], "G")}
         levels = {"L": ("", 0), "G": ("G trains delayed", 1)}
         with mock.patch.object(ps, "get_feed", side_effect=lambda line: feeds[line]), \
-             mock.patch.object(ps, "alert_for_line", side_effect=lambda line, ts: levels.get(line, ("", 0))), \
+             mock.patch.object(ps, "alert_for_line", side_effect=lambda line, ts, *a: levels.get(line, ("", 0))), \
              mock.patch.object(ps, "datetime") as dt:
             dt.now.return_value = at(10, 10)
             self.assertEqual(c.get("/next-trains?panel_id=TT0001").get_json()["dual"], 0)

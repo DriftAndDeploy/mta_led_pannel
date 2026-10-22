@@ -146,6 +146,14 @@ protects against crashes, not against firmware that runs but misbehaves.
   along the bottom in this order: Arrive By's "Leave no later than …" (green),
   "Leave by" (white), weather, service alert (yellow) — each only if it's
   turned on (and, for alerts, if there is one).
+- **Service alerts follow your direction:** the panel (scrolling alert and
+  status dot) skips alerts that only affect the other direction — e.g. riding
+  N, a "Canarsie-bound only" problem doesn't show. Direction comes from the
+  platform stops the MTA tags (L14N / L14S), or else words in the alert
+  ("Northbound", "Manhattan-bound"); alerts that don't say, or name both
+  directions, always show. Two Trains filters each train by its own
+  direction; Both Directions shows everything. The web app's alert ticker
+  in 03 uses the same rules.
 - **Minimalist** is now a preset in **07 Customize Layout** (bullet + time
   centred, 2×2 status dot: green normal, yellow alerts/changes, red suspended).
   Panels that had the old Minimalist Mode toggle on were switched to that
