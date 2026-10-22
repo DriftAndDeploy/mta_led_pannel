@@ -116,8 +116,9 @@ DIRECTION_LABELS.update({
 # element's usual colour. Types 8 and 12 (countdowns) were removed in v7.9.
 EL = {"bullet": 1, "time": 2, "leave": 3, "ticker": 4, "weather": 5, "dot": 6, "clock": 7,
       "label": 9, "bullet2": 10, "time2": 11}
-LAYOUT_V = 3       # v1 (7.8): leave a = format; v2: leave a = font size, b bit 2 = format;
-                   # v3: ticker drops leave-by (bit 0), size in b bits 2-3 is 0-3 (was size - 1)
+LAYOUT_V = 4       # v1 (7.8): leave a = format; v2: leave a = font size, b bit 2 = format;
+                   # v3: ticker drops leave-by (bit 0), size in b bits 2-3 is 0-3 (was size - 1);
+                   # v4: leave reads "Leave by 8:32" (77 px in Small), so long ones go Tiny
 LAYOUT_PRESETS = {
     "standard":   [[EL["time"], 32, 0, 2, 1, 0], [EL["bullet"], 8, 24, 7, 0, 0],
                    [EL["ticker"], 17, 20, 47, 6, 0]],
@@ -255,6 +256,13 @@ def migrate_config(raw: dict) -> dict:
                 for e in raw[key]:
                     if isinstance(e, list) and len(e) == 6 and e[0] == EL["ticker"] and isinstance(e[4], int):
                         e[4] = (e[4] & 2) | ((((e[4] >> 2) & 3) + 1) << 2)
+    if raw.get("layout_v", 1) < 4:
+        for key in ("layout_single", "layout_two"):
+            if isinstance(raw.get(key), list):
+                for e in raw[key]:
+                    if (isinstance(e, list) and len(e) == 6 and e[0] == EL["leave"]
+                            and isinstance(e[4], int) and not e[4] & 4 and e[3] == 1):
+                        e[3] = 0                              # "Leave by 8:32" only fits in Tiny
     raw["layout_v"] = LAYOUT_V
     # Faster Route (removed in v8.0): keep its destination for Arrive By.
     if "alt_dest" in raw:
@@ -275,7 +283,7 @@ def migrate_config(raw: dict) -> dict:
                 if leave:
                     lay.append([EL["leave"], 63, 1, 0, 2, 0])       # tiny, top right
             elif leave:
-                lay.append([EL["leave"], 32, 24, 1, 1, 0])
+                lay.append([EL["leave"], 32, 25, 0, 1, 0])
                 if wx:
                     lay.append([EL["weather"], 63, 1, 1, 2, 0])
             else:

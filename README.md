@@ -165,8 +165,9 @@ protects against crashes, not against firmware that runs but misbehaves.
   deadline the time is an estimate, shown with a "~" (fastest trip right now +
   8 min for waiting). If nothing gets there in time: "Leave now: you'd reach
   … at 9:07 (7 min late)". The toggle's hint shows what it would say right
-  now and which train it's based on. In a custom layout the message scrolls in
-  the Scrolling text piece.
+  now and which train it's based on. It scrolls along the bottom of the normal
+  screen; with Use My Layout on, it scrolls in the Scrolling text piece. The
+  built-in Two Trains / Both Directions screens have no room for it.
 - **Live Scores** (**Display Options → Live Scores**, with **MLB** / **NBA**
   sub-toggles) turns the panel into a scoreboard: it shows games *instead of*
   trains, and the train options are locked in the web app until it's turned off

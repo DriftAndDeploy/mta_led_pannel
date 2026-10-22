@@ -25,8 +25,8 @@
 // Version — bump FW_BUILD for every release you publish over the air.
 // The server reads FW_TAG out of the .bin to learn which build it holds.
 // ---------------------------------------------------------------------------
-#define FW_VERSION "8.0.0"
-#define FW_BUILD   800
+#define FW_VERSION "8.1.0"
+#define FW_BUILD   810
 
 #define STR_(x) #x
 #define STR(x)  STR_(x)
@@ -841,7 +841,7 @@ void render(const PanelState& in) {
     bool hasAlert = s.show_alerts && s.alert_msg[0];
     if (hasLeave) snprintf(leave_part, sizeof(leave_part), "Leave by %s  ", s.leave_by);
     else          leave_part[0] = '\0';
-    if (hasAlert) snprintf(alert_part, sizeof(alert_part), "> %s  ", s.alert_msg);
+    if (hasAlert) snprintf(alert_part, sizeof(alert_part), "%s  ", s.alert_msg);
     else          alert_part[0] = '\0';
     if (s.dl_msg[0]) snprintf(dl_part, sizeof(dl_part), "%s  ", s.dl_msg);
     else             dl_part[0] = '\0';
@@ -1600,7 +1600,7 @@ void buildWeatherText(const PanelState& s) {
 //   x,y: bullets = centre; text = anchor (b bits 0-1: 0 left, 1 centre,
 //        2 right) + top
 //   a:   bullet radius 4-7 | font size (text 0-4, weather 1-3) | ticker width
-//   b:   leave bit 2 = time only ("8:32") | ticker bit 1 = also weather,
+//   b:   leave bit 2 = time only ("8:32" instead of "Leave by 8:32") | ticker bit 1 = also weather,
 //        bits 2-3 = font size 0-3
 // Font sizes: 0 = 3x5, 1 = 5x7, 2-4 = 5x7 scaled up with 1 px letter
 // spacing and a slim colon (size 2 is the big train time).
@@ -1830,7 +1830,7 @@ void drawCustom(const PanelState& s) {
         break;
       case EL_LEAVE:
         if (s.leave_by[0] && strcmp(s.leave_by, "--:--")) {
-          snprintf(buf, sizeof(buf), (l.b & 4) ? "%s" : "Leave %s", s.leave_by);
+          snprintf(buf, sizeof(buf), (l.b & 4) ? "%s" : "Leave by %s", s.leave_by);
           drawTextAt(buf, l.x, l.y, size, align, own ? own : white);
         }
         break;

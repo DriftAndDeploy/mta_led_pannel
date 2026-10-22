@@ -875,7 +875,7 @@ class CustomLayout(unittest.TestCase):
         with open(ps.config_path(pid), "w") as f:
             json.dump(old, f)
         cfg = ps.load_config(pid)
-        self.assertEqual(cfg["layout_single"], [[3, 2, 24, 1, 0, 0], [3, 63, 24, 1, 6, 0], [2, 32, 0, 2, 1, 0]])
+        self.assertEqual(cfg["layout_single"], [[3, 2, 24, 0, 0, 0], [3, 63, 24, 1, 6, 0], [2, 32, 0, 2, 1, 0]])   # "Leave by" -> Tiny
         self.assertEqual(cfg["layout_two"], [[11, 59, 17, 2, 2, 0]])
         self.assertEqual(ps.load_config(pid)["layout_single"], cfg["layout_single"])   # same every load
         # minimalist mode -> the Minimalist layout, with a ticker if leave-by / alerts were on
@@ -884,7 +884,7 @@ class CustomLayout(unittest.TestCase):
         cfg = ps.load_config(pid)
         self.assertTrue(cfg["custom_layout"])
         self.assertNotIn("minimalist", cfg)
-        self.assertEqual(cfg["layout_single"][-1], [ps.EL["leave"], 32, 24, 1, 1, 0])   # leave-by on its own
+        self.assertEqual(cfg["layout_single"][-1], [ps.EL["leave"], 32, 25, 0, 1, 0])   # leave-by on its own
         self.assertEqual(ps._layout(cfg["layout_single"]), cfg["layout_single"])
         with open(ps.config_path(pid), "w") as f:
             json.dump({"minimalist": True, "show_leave_by": False, "show_alerts": False}, f)

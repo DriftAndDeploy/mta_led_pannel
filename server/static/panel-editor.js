@@ -9,7 +9,7 @@
  *   bullets: x,y = centre, a = radius 4-7
  *   text:    x = anchor (b bits 0-1: 0 left, 1 centre, 2 right), y = top,
  *            a = font size 0-4 (weather 1-3)
- *   leave:   b bit 2 = time only ("8:32")
+ *   leave:   b bit 2 = time only ("8:32" instead of "Leave by 8:32")
  *   ticker:  scrolls in [x, x+a): Arrive By message + alerts; b bit 1 = also
  *            weather, bits 2-3 = font size 0-3
  * Font sizes: 0 = 3x5, 1 = 5x7, 2-4 = 5x7 scaled up with 1 px letter spacing
@@ -23,7 +23,7 @@ const EL = { bullet: 1, time: 2, leave: 3, ticker: 4, weather: 5, dot: 6, clock:
 const EL_INFO = {
   1:  { name: 'Line bullet',        kind: 'bullet', def: [1, 8, 24, 7, 0, 0] },
   2:  { name: 'Train time',         kind: 'text',   def: [2, 32, 0, 2, 1, 0] },
-  3:  { name: 'Leave by',           kind: 'text',   def: [3, 2, 24, 1, 0, 0] },
+  3:  { name: 'Leave by',           kind: 'text',   def: [3, 2, 25, 0, 0, 0] },
   4:  { name: 'Scrolling text',     kind: 'ticker', def: [4, 17, 20, 47, 4, 0] },
   5:  { name: 'Weather',            kind: 'text',   def: [5, 63, 24, 1, 2, 0] },
   6:  { name: 'Status dot',         kind: 'dot',    def: [6, 2, 1, 0, 0, 0] },
@@ -189,7 +189,7 @@ function render(layout, data, frameNo) {
       }
       case EL.time:  box = textAt(f, data.time, x, y, size, align, own(e, data.timeRgb)); break;
       case EL.time2: box = textAt(f, data.time2, x, y, size, align, own(e, data.timeRgb)); break;
-      case EL.leave: box = textAt(f, b & 4 ? data.leave : 'Leave ' + data.leave, x, y, size, align, own(e, white)); break;
+      case EL.leave: box = textAt(f, b & 4 ? data.leave : 'Leave by ' + data.leave, x, y, size, align, own(e, white)); break;
       case EL.weather: {
         const ws = Math.max(1, Math.min(3, a));
         const w = runW(data.wx, ws) - 1;
@@ -207,7 +207,7 @@ function render(layout, data, frameNo) {
         const parts = [];
         if (data.deadline) parts.push([data.deadline + '  ', own(e, data.colorAll ? data.timeRgb : [120, 230, 150]), 0]);
         if (b & 2) parts.push([data.wx, own(e, data.colorAll ? data.timeRgb : [150, 200, 255]), 12 * Math.max(1, ts)]);
-        parts.push(['> ' + data.alert + '  ', own(e, data.colorAll ? data.timeRgb : [255, 220, 0]), 0]);
+        parts.push([data.alert + '  ', own(e, data.colorAll ? data.timeRgb : [255, 220, 0]), 0]);
         const total = parts.reduce((w, p) => w + runW(p[0], ts) + p[2], 0);
         const period = (R - L) + total + 2;               // same cycle as the firmware
         let cx = R - (frameNo % period);

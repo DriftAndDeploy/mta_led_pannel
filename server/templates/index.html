@@ -2330,7 +2330,7 @@ function renderEditorSide() {
     html += `<div class="prop-row"><span>ALIGN</span>${[[0, 'Left'], [1, 'Center'], [2, 'Right']].map(([a, n]) => btn(n, (e[4] & 3) === a, `setAlign(${a})`)).join('')}</div>`;
   }
   if (t === PS.EL.leave) {
-    html += `<div class="prop-row"><span>SHOW</span>${btn('Leave 8:32', !(e[4] & 4), 'setLeaveShort(false)')}${btn('8:32', e[4] & 4, 'setLeaveShort(true)')}</div>`;
+    html += `<div class="prop-row"><span>SHOW</span>${btn('Leave by 8:32', !(e[4] & 4), 'setLeaveShort(false)')}${btn('8:32', e[4] & 4, 'setLeaveShort(true)')}</div>`;
   }
   if (t === PS.EL.label) {
     html += `<div class="prop-row"><span>TEXT</span><input type="text" maxlength="15" value="${escapeHtml(layoutLabel)}"
@@ -2502,7 +2502,7 @@ function renderAlt() {
   document.getElementById('alt-config').classList.toggle('show', on);
   const t1 = trainAt(0);
   document.getElementById('alt-from').innerHTML = t1?.station
-    ? `From <b>${escapeHtml(t1.station.name)}</b> (02) with a ${t1.walk ?? walkMinutes} min walk (05) · any line, up to one transfer · shows on the panel in the 3 hours before`
+    ? `From <b>${escapeHtml(t1.station.name)}</b> (02) with a ${t1.walk ?? walkMinutes} min walk (05) · any line, up to one transfer · in the 3 hours before, it scrolls along the bottom of the normal screen, or in the Scrolling text piece when Use My Layout (07) is on · not shown with Two Trains / Both Directions`
     : 'Pick the panel\'s line and station in 01–02 first — trips start there';
 
   const destBox = document.getElementById('alt-dest-box');
